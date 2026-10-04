@@ -24,7 +24,8 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-DEFAULT_PROFILE = {"name": "default", "links": ["tcp", "ssh", "cmd"], "scope": "all", "priority": -1}
+DEFAULT_PROFILE = {"name": "default", "links": ["tcp", "ssh", "cmd"], "scope": "all", "priority": -1,
+                   "gonc": ["tcp", "lan", "p2p"]}
 
 
 def _run(argv: list[str], timeout: float = 3.0) -> str:

@@ -147,6 +147,15 @@ def endpoint_spec(kind: str, ep: dict, peer: str, profile: dict) -> dict:
     return check_spec(spec)
 
 
+def _gonc_allowed(ep: dict, profile: dict, peer: str) -> bool:
+    from messnet import gonc
+    try:
+        return gonc.allowed(ep, profile)
+    except ValueError as err:
+        log.warning("bad gonc endpoint for %s: %s", peer, err)
+        return False
+
+
 def plan_peer(peer: str, rec: dict, profile: dict, facts: dict) -> list[dict]:
     """Ordered link specs to try for PEER under PROFILE."""
     specs = []
@@ -156,6 +165,8 @@ def plan_peer(peer: str, rec: dict, profile: dict, facts: dict) -> list[dict]:
             continue
         for ep in rec.get(kind, []):
             if not endpoint_usable(ep, profile, facts):
+                continue
+            if kind == "gonc" and not _gonc_allowed(ep, profile, peer):
                 continue
             try:
                 specs.append(endpoint_spec(kind, ep, peer, profile))

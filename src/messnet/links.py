@@ -29,7 +29,7 @@ from messnet.replicate import LINK_SCOPES, Session
 log = logging.getLogger(__name__)
 
 REMOTE_COMMAND = ["messnet", "link", "--stdio"]
-ENDPOINT_KINDS = ("tcp", "ssh", "cmd", "iroh")
+ENDPOINT_KINDS = ("tcp", "ssh", "cmd", "iroh", "gonc")
 
 
 def parse_addr(addr: str, default_host: str = "127.0.0.1") -> tuple[str, int]:
@@ -47,9 +47,12 @@ def ssh_argv(target: str, command: list[str] | str | None = None) -> list[str]:
             shlex.join(remote)]
 
 
-def link_argv(spec: dict) -> list[str] | None:
+def link_argv(spec: dict, cfg=None) -> list[str] | None:
     """The subprocess argv for a spec, or None for non-subprocess links."""
     kind = spec.get("kind")
+    if kind == "gonc":
+        from messnet import gonc
+        return gonc.dial_argv(spec, cfg)
     if kind == "ssh":
         return ssh_argv(spec["target"], spec.get("command"))
     if kind == "cmd":
@@ -61,6 +64,8 @@ def link_argv(spec: dict) -> list[str] | None:
 def link_label(spec: dict) -> str:
     if spec.get("name"):
         return spec["name"]
+    if spec.get("kind") == "gonc":
+        return f"gonc:{spec.get('mode', 'p2p')}:{spec.get('addr') or spec.get('secret')}"
     where = spec.get("target") or spec.get("addr") or spec.get("argv") or str(spec.get("id", ""))[:10]
     if isinstance(where, list):
         where = shlex.join(where)
@@ -69,13 +74,16 @@ def link_label(spec: dict) -> str:
 
 def check_spec(spec: dict) -> dict:
     kind = spec.get("kind")
-    need = {"ssh": "target", "tcp": "addr", "cmd": "argv", "iroh": "id"}
+    need = {"ssh": "target", "tcp": "addr", "cmd": "argv", "iroh": "id", "gonc": "secret"}
     if kind not in need:
         raise ValueError(f"link kind must be one of {tuple(need)}: {spec}")
     if need[kind] not in spec:
         raise ValueError(f"{kind} link needs {need[kind]!r}: {spec}")
     if spec.get("scope", "all") not in LINK_SCOPES:
         raise ValueError(f"link scope must be one of {LINK_SCOPES}: {spec}")
+    if kind == "gonc":
+        from messnet import gonc
+        gonc.check(spec)
     return spec
 
 
@@ -101,7 +109,7 @@ async def run_link(node: Node, spec: dict, connect_timeout: float = 30.0) -> Non
         reader, writer = await asyncio.wait_for(tr.dial(spec), connect_timeout)
         await make_session(node, spec, reader, writer).run()
         return
-    argv = link_argv(spec)
+    argv = link_argv(spec, node.cfg)
     if argv is None:
         host, port = parse_addr(spec["addr"])
         reader, writer = await asyncio.wait_for(

@@ -35,6 +35,13 @@ class Config:
     # iroh transport: bind ("HOST:PORT"), relays (list of URLs; empty disables relaying),
     # listen (accept iroh links), scope (widest scope of inbound iroh links).
     iroh: dict = field(default_factory=dict)
+    # Local (never synced) directory of secret files, e.g. gonc keys.
+    secrets: Path = field(default_factory=lambda: _xdg("XDG_CONFIG_HOME", ".config") / "messnet" / "secrets")
+    gonc_bin: str = "gonc"
+    # gonc responders this node runs (see messnet.gonc).
+    gonc_serve: list[dict] = field(default_factory=list)
+    # Path of the loaded config file, if any (not a config key).
+    path: Path | None = field(default=None, repr=False)
     poll: float = 0.25
     listen: list = field(default_factory=list)
     links: list[dict] = field(default_factory=list)
@@ -48,10 +55,10 @@ class Config:
 
     def as_dict(self) -> dict:
         return {f.name: (str(v) if isinstance(v := getattr(self, f.name), Path) else v)
-                for f in fields(self)}
+                for f in fields(self) if f.name != "path"}
 
 
-_PATHS = {"spool", "local_spool", "db", "state", "etc", "key"}
+_PATHS = {"spool", "local_spool", "db", "state", "etc", "key", "secrets"}
 _ENV_KEYS = ("node", "spool", "local_spool", "db", "state", "etc", "key", "poll", "network")
 
 
@@ -86,7 +93,10 @@ def load_config(path: str | Path | None = None, **overrides) -> Config:
     cpath = Path(explicit).expanduser() if explicit else default_config_path()
     if cpath.exists():
         with open(cpath, "rb") as fp:
-            _apply(cfg, tomllib.load(fp))
+            values = tomllib.load(fp)
+        values.pop("path", None)
+        _apply(cfg, values)
+        cfg.path = cpath
     elif explicit:
         raise FileNotFoundError(f"config file not found: {cpath}")
     _apply(cfg, overrides)

@@ -109,6 +109,21 @@ later phase.
 - A self-hosted =iroh-relay= serves HTTP(S) over TCP, so a node with no
   UDP can reach it through an ssh =-L= forward listed in =relays=.
 
+* gonc
+
+- Peer files advertise =[[gonc]]= endpoints (=mode= =p2p= / =tcp=,
+  =secret= name, =addr=, =lan=, =mqttsrv=, =stunsrv=, =args=, =scope=).
+  The secret itself lives in the local, unsynced =secrets= directory on
+  both nodes and is always passed to gonc as =@file=.
+- Policy classes: =tcp= (TLS+PSK direct), =lan= (p2p, LAN broadcast
+  only), =p2p= (self-hosted =mqttsrv= and =stunsrv=), =p2p-public=
+  (gonc's public MQTT/STUN servers).  Profiles allow classes with
+  =gonc = [...]=; the default excludes =p2p-public=.
+- The responding node lists the same endpoint under =gonc_serve=; =run=
+  supervises =gonc … -k -e "messnet link --stdio --no-maintain"=
+  (=-mqtt-wait= / =-lan-passive= for p2p, =-l HOST PORT= for tcp),
+  and dialers use =-mqtt-hello= (p2p) or =HOST PORT= (tcp).
+
 * Layout
 
 | module          | role                                                   |
@@ -128,6 +143,7 @@ later phase.
 | =manager.py=    | link manager: keep wanted peers linked per policy      |
 | =keys.py=       | node ed25519 key, id, sign / verify                    |
 | =iroh_link.py=  | optional iroh transport (dial, serve, authorize)       |
+| =gonc.py=       | gonc dial / responder commands, policy classes         |
 | =daemon.py=     | =run=: ingest loop, state updates, link supervisor     |
 | =cli.py=        | Click commands only                                    |
 
@@ -160,7 +176,7 @@ messnet config                       # print effective configuration
 4. [X] iroh link (optional extra =messnet[iroh]=): relay disabled or
    self-hosted, static discovery from the peer directory, ALPN
    =messnet/1=; node key reused as iroh endpoint id.
-5. [ ] gonc link presets per network profile (direct / SOCKS5 relay;
+5. [X] gonc link presets per network profile (direct / SOCKS5 relay;
    P2P only where public rendezvous is permitted).
 6. [ ] Hardening: signed TCP handshake, optional event signatures,
    spool retention/compaction, version-vector audit, store rebuild.

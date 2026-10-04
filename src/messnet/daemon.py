@@ -57,6 +57,10 @@ async def run(node: Node) -> None:
     tasks += [asyncio.create_task(keep_link(node, spec)) for spec in specs]
     if node.cfg.peers:
         tasks.append(asyncio.create_task(manager.manage(node)))
+    if node.cfg.gonc_serve:
+        from messnet import gonc
+        tasks += [asyncio.create_task(gonc.serve(node.cfg, gonc.check(dict(ep))))
+                  for ep in node.cfg.gonc_serve]
     if wants_iroh_listener(node):
         from messnet import iroh_link
         tasks.append(asyncio.create_task((await iroh_link.transport(node)).serve()))
