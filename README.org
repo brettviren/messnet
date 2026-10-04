@@ -89,8 +89,6 @@ Scalars may also be set by =MESSNET_<KEY>= environment variables.
 #+begin_src toml
 node = "hokum.bv"
 spool = "~/sync/messnet/spool"
-listen = [{addr = "100.96.203.121:7701", scope = "lan"}]
-
 etc = "~/sync/messnet/etc"
 peers = "*"
 listen = [{addr = "100.96.203.121:7701", scope = "lan"}]
