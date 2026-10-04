@@ -131,7 +131,7 @@ class IrohTransport:
     def _authorize(self, remote_id: str) -> str | None:
         """Node name for REMOTE_ID from the peer directory (or "" if any is allowed)."""
         for name, rec in peers.load_peers(self.node.cfg.etc).items():
-            if any(ep.get("id") == remote_id for ep in rec.get("iroh", [])):
+            if rec.get("id") == remote_id or any(ep.get("id") == remote_id for ep in rec.get("iroh", [])):
                 return name
         return "" if self.node.cfg.iroh.get("allow") == "any" else None
 

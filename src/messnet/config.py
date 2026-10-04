@@ -42,6 +42,8 @@ class Config:
     gonc_serve: list[dict] = field(default_factory=list)
     # Path of the loaded config file, if any (not a config key).
     path: Path | None = field(default=None, repr=False)
+    # Require the signed handshake on TCP links (in and out).
+    tcp_auth: bool = True
     poll: float = 0.25
     listen: list = field(default_factory=list)
     links: list[dict] = field(default_factory=list)

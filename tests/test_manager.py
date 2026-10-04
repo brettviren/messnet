@@ -1,6 +1,6 @@
 import asyncio
 
-from messnet import manager, peers
+from messnet import daemon, manager
 from messnet.links import serve_tcp
 
 from test_replicate import types_at, until
@@ -24,8 +24,8 @@ def test_manager_links_and_switches_network(make_node, tmp_path):
     async def main():
         server = await serve_tcp(a, "127.0.0.1:0", "lan")
         port = server.sockets[0].getsockname()[1]
-        peers.publish_peer(etc, peers.peer_record("a", {"tcp": [{"addr": f"127.0.0.1:{port}",
-                                                                 "scope": "lan"}]}))
+        a.cfg.advertise = {"tcp": [{"addr": f"127.0.0.1:{port}", "scope": "lan"}]}
+        daemon.publish_self(a)
         task = asyncio.create_task(manager.manage(b, lambda: facts))
         try:
             await until(lambda: types_at(b) == ["lan.v1"])

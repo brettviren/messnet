@@ -326,10 +326,8 @@ def peers_list(ctx):
 @peers_grp.command("publish", context_settings=CONTEXT)
 @click.pass_context
 def peers_publish(ctx):
-    """Write this node's peer file from the 'advertise' configuration."""
+    """Write this node's peer file: its id and the 'advertise' endpoints."""
     node = _node(ctx)
-    if not ctx.obj.advertise:
-        raise click.ClickException("nothing to publish: no 'advertise' in configuration")
     click.echo("published" if daemon.publish_self(node) else "unchanged")
 
 
@@ -359,3 +357,36 @@ def links(ctx, fmt):
         d = ev.get("data", {})
         extra = f" error={d['error']}" if d.get("error") else ""
         click.echo(f"{ev['subject']:20} {d.get('state', '?'):4} {ev['time']} {d.get('link', '')}{extra}")
+
+
+@cli.command(context_settings=CONTEXT, no_args_is_help=True)
+@click.option("--before", required=True, help="Prune events older than an age (90d) or ISO time.")
+@click.option("--spool", "with_spool", is_flag=True,
+              help="Also delete this node's spool files whose events are all pruned.")
+@click.pass_context
+def prune(ctx, before, with_spool):
+    """Delete old events from the store (state files are kept)."""
+    try:
+        cutoff = parse_since(before)
+    except ValueError as err:
+        raise click.BadParameter(str(err), param_hint="--before") from err
+    events, files = _node(ctx).prune(cutoff, with_spool)
+    click.echo(f"pruned {events} events, {files} spool files")
+
+
+@cli.command(context_settings=CONTEXT)
+@click.pass_context
+def gaps(ctx):
+    """List missing seq ranges per stream (normally empty once links catch up)."""
+    for key, ranges in sorted(_node(ctx).store.gaps().items()):
+        click.echo(f"{key} " + " ".join(f"{lo}" if lo == hi else f"{lo}-{hi}" for lo, hi in ranges))
+
+
+@cli.command(context_settings=CONTEXT)
+@click.option("--yes", is_flag=True, help="Confirm: the current store is moved to *.bak.")
+@click.pass_context
+def rebuild(ctx, yes):
+    """Rebuild the store from the spools (peers resend link-only events later)."""
+    if not yes:
+        raise click.UsageError("rebuild moves the store aside; pass --yes to confirm")
+    click.echo(f"rebuilt store with {_node(ctx).rebuild()} events")

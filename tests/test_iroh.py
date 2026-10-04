@@ -65,7 +65,7 @@ def test_iroh_link_replicates(make_node):
 
 
 def test_iroh_refuses_unknown_endpoint(make_node):
-    a, b = make_node("a"), make_node("b")
+    a, b = make_node("a"), make_node("b", publish=False)
     setup(a)
     setup(b)
     a.emit("secret.v1")

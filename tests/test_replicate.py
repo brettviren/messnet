@@ -84,9 +84,11 @@ def test_reconnect_resumes(make_node):
     asyncio.run(linked(a, b, "all", lambda: until(lambda: len(types_at(b)) == 2)))
 
 
-def test_cmd_link_over_subprocess_stdio(make_node, tmp_path):
+def test_cmd_link_over_subprocess_stdio(make_node, tmp_path, monkeypatch):
     """A cmd link (as ssh/gonc would be) to a 'messnet link --stdio' child process."""
     a, b = make_node("a"), make_node("b")
+    monkeypatch.setenv("MESSNET_KEY", str(b.cfg.key))
+    monkeypatch.setenv("MESSNET_LOCAL_SPOOL", str(b.cfg.local_spool))
     b.emit("from.b")
     a.emit("from.a")
     b.close()

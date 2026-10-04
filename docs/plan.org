@@ -68,9 +68,16 @@ Newline-delimited JSON frames over any bidirectional byte stream.
    all other links' pollers, giving multi-hop store-and-forward.
 5. ={"op":"ping"}= keepalive.
 
-Authentication is delegated to the link (ssh keys, tailnet ACL, iroh
-endpoint id, gonc PSK) in v1; a signed handshake for raw TCP comes in a
-later phase.
+Every hello carries the node id (ed25519 public key) and a random
+nonce; each side then sends ={"op":"auth","sig":…}= signing the peer's
+nonce and both node names.  A side requiring auth (TCP links by
+default) verifies it against the id the peer directory lists for that
+node, and on failure sends ={"op":"error","reason":…}= and closes.
+ssh, iroh and gonc links are authenticated by their transport.
+
+Pruning raises a per-stream /floor/: every seq at or below it counts as
+present for version vectors and seq allocation, and is never inserted
+again, so pruned events are not re-replicated.
 
 * Links, peers and networks
 
@@ -178,8 +185,11 @@ messnet config                       # print effective configuration
    =messnet/1=; node key reused as iroh endpoint id.
 5. [X] gonc link presets per network profile (direct / SOCKS5 relay;
    P2P only where public rendezvous is permitted).
-6. [ ] Hardening: signed TCP handshake, optional event signatures,
-   spool retention/compaction, version-vector audit, store rebuild.
+6. [X] Hardening: signed handshake (required on TCP by default,
+   =tcp_auth=), prune with per-stream floors (=prune --before=),
+   gap audit (=gaps=), store rebuild (=rebuild --yes=).
+   Deferred: per-event signatures (only needed if events are ever
+   relayed through nodes that are not trusted).
 
 Producers / consumers (separate track, start after phase 1):
 =~/scripts/backup= emit, fish tide item reading state, cron wrapper

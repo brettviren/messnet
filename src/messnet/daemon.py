@@ -31,9 +31,7 @@ def listen_specs(listen: list) -> list[dict]:
 
 
 def publish_self(node: Node) -> bool:
-    """Write this node's peer file from its ``advertise`` config. True if changed."""
-    if not node.cfg.advertise:
-        return False
+    """Write this node's peer file (its id plus ``advertise`` endpoints). True if changed."""
     advertise = dict(node.cfg.advertise)
     if "iroh" in advertise:
         from messnet.iroh_link import advertise_ids

@@ -97,8 +97,9 @@ async def stdio_streams() -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
 
 
 def make_session(node: Node, spec: dict, reader, writer) -> Session:
+    auth = spec.get("auth", node.cfg.tcp_auth if spec.get("kind") == "tcp" else False)
     return Session(node, reader, writer, spec.get("scope", "all"),
-                   expect=spec.get("peer"), label=link_label(spec))
+                   expect=spec.get("peer"), label=link_label(spec), auth=auth)
 
 
 async def run_link(node: Node, spec: dict, connect_timeout: float = 30.0) -> None:
@@ -158,7 +159,8 @@ async def serve_tcp(node: Node, addr: str, scope: str = "all") -> asyncio.Server
         peer = writer.get_extra_info("peername")
         link_scope = "all" if "all" in (scope, node.profile_scope) else "lan"
         try:
-            await Session(node, reader, writer, link_scope, label=f"tcp-in:{host}:{port}").run()
+            await Session(node, reader, writer, link_scope, label=f"tcp-in:{host}:{port}",
+                          auth=node.cfg.tcp_auth).run()
         except Exception as err:
             log.warning("tcp link from %s failed: %s", peer, err)
 

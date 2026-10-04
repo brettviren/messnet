@@ -4,7 +4,9 @@ import asyncio
 import logging
 import time
 from collections.abc import Iterator
+from pathlib import Path
 
+from messnet import keys
 from messnet.config import Config
 from messnet.event import EventError, make_event
 from messnet.spool import Spool, read_from
@@ -73,6 +75,43 @@ class Node:
                     count += self.store.insert(ev)
                 self.store.set_file_offset(path, offset)
         return count
+
+    @property
+    def seed(self) -> bytes:
+        """The node's secret key seed (created on first use)."""
+        if getattr(self, "_seed", None) is None:
+            self._seed = keys.load_seed(self.cfg.key)
+        return self._seed
+
+    def prune(self, before: float, spool: bool = False) -> tuple[int, int]:
+        """Prune stored events older than BEFORE; with SPOOL also delete this node's
+        spool files whose events are all pruned.  Return (events, files) deleted."""
+        with self.store.transaction():
+            events = self.store.prune(before)
+        files = 0
+        if spool:
+            for scope, sp in self.spools.items():
+                floor = self.store.floor(self.name, scope)
+                for path in sp.origin_files(self.name):
+                    if floor and all(ev["seq"] <= floor for ev, _ in read_from(path, 0)):
+                        path.unlink()
+                        self.store.forget_file(path)
+                        files += 1
+        return events, files
+
+    def rebuild(self) -> int:
+        """Move the store aside and rebuild it from the spools. Return events ingested.
+
+        Events this node only received over live links are dropped; peers
+        resend them on the next link since the version vector shrinks.
+        """
+        self.store.close()
+        for suffix in ("", "-wal", "-shm"):
+            path = Path(f"{self.cfg.db}{suffix}")
+            if path.exists():
+                path.replace(f"{path}.bak")
+        self.store = Store(self.cfg.db)
+        return self.ingest()
 
     def receive(self, ev: dict) -> bool:
         """Store an event received from a peer; True if it was new."""

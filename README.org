@@ -44,10 +44,46 @@ messnet connect cmd -k -- gonc ...                   # any stdio transport
 messnet run                                          # daemon from config.toml
 #+end_example
 
+* Peers, networks and policy
+
+Share an =etc= directory with Syncthing.  Each node publishes
+=etc/peers/<node>.toml= (=messnet peers publish=, also done by =run=)
+holding its id and the endpoints from its =advertise= table.  Network
+profiles in =etc/networks/*.toml= pick allowed link kinds and the widest
+scope from detected facts (=messnet net --facts=).  With =peers= set,
+=run= keeps those peers linked; =messnet peers plan= shows what it would
+try and =messnet links= what happened.
+
+#+begin_src toml
+# etc/networks/home.toml
+detect = {domain = "home.local", tailscale = true}
+links = ["tcp", "ssh", "iroh", "gonc"]
+scope = "lan"
+gonc = ["tcp", "lan"]
+#+end_src
+
+TCP links require a signed handshake: the peer must be listed (with its
+id) in the peer directory.  Optional transports: iroh (=uv sync --extra
+iroh=; relays disabled or self-hosted only) and gonc (secrets kept in
+the local =secrets= dir; public rendezvous only if a profile allows
+=p2p-public=).  See [[file:docs/plan.org]] for details.
+
+* Maintenance
+
+#+begin_example
+messnet id                     # node id (public key, also iroh endpoint id)
+messnet vv                     # version vector
+messnet gaps                   # missing seq ranges per stream
+messnet prune --before 180d --spool
+messnet rebuild --yes          # rebuild the store from the spools
+#+end_example
+
 * Configuration
 
 =~/.config/messnet/config.toml= (or =-c FILE=, =$MESSNET_CONFIG=).  Keys:
-=node=, =spool=, =local_spool=, =db=, =state=, =poll=, =listen=, =links=.
+=node=, =spool=, =local_spool=, =db=, =state=, =etc=, =key=, =secrets=,
+=poll=, =listen=, =links=, =peers=, =advertise=, =network=,
+=manage_interval=, =tcp_auth=, =iroh=, =gonc_bin=, =gonc_serve=.
 Scalars may also be set by =MESSNET_<KEY>= environment variables.
 
 #+begin_src toml
@@ -55,8 +91,18 @@ node = "hokum.bv"
 spool = "~/sync/messnet/spool"
 listen = [{addr = "100.96.203.121:7701", scope = "lan"}]
 
-[[links]]
-kind = "ssh"          # ssh | tcp | cmd
+etc = "~/sync/messnet/etc"
+peers = "*"
+listen = [{addr = "100.96.203.121:7701", scope = "lan"}]
+iroh = {bind = "0.0.0.0:7702"}
+
+[advertise]
+tcp = [{addr = "100.96.203.121:7701", scope = "lan", tailscale = true}]
+ssh = [{target = "hokum"}]
+iroh = [{addrs = ["100.96.203.121:7702"]}]
+
+[[links]]             # explicit links, in addition to managed peers
+kind = "ssh"          # ssh | tcp | cmd | iroh | gonc
 target = "haiku"
 scope = "all"
 #+end_src

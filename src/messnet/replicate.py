@@ -1,6 +1,9 @@
 """Replication protocol v1: newline-delimited JSON frames over any byte stream.
 
-1. both sides send ``{"op":"hello","proto":1,"node":N,"vv":{stream: seq}}``
+1. both sides send ``{"op":"hello","proto":1,"node":N,"id":PUB,"nonce":R,"vv":{stream: seq}}``
+   then ``{"op":"auth","sig":S}``, S signing the peer's nonce and both node
+   names with the node key; a side requiring auth checks S against the
+   id the peer directory lists for the peer
 2. each sends the events the peer lacks per the peer's version vector
 3. then each live-pushes newly stored events (found by polling the store)
 4. ``{"op":"ping"}`` keeps idle links alive and detects dead ones
@@ -14,7 +17,9 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
 
+from messnet import keys
 from messnet.event import EventError, validate
 from messnet.node import Node
 from messnet.store import stream_key
@@ -30,6 +35,10 @@ class ProtocolError(Exception):
     pass
 
 
+def auth_message(nonce: str, signer: str, verifier: str) -> bytes:
+    return f"messnet-auth-1|{nonce}|{signer}|{verifier}".encode()
+
+
 def allowed(scope: str, link_scope: str) -> bool:
     """May an event of SCOPE travel over a link of LINK_SCOPE?"""
     return scope == "all" or (scope == "lan" and link_scope == "lan")
@@ -40,12 +49,13 @@ class Session:
 
     def __init__(self, node: Node, reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
                  link_scope: str = "all", keepalive: float = 30.0, timeout: float = 90.0,
-                 expect: str | None = None, label: str = "", report: bool = True):
+                 expect: str | None = None, label: str = "", report: bool = True,
+                 auth: bool = False):
         if link_scope not in LINK_SCOPES:
             raise ValueError(f"link scope must be one of {LINK_SCOPES}: {link_scope!r}")
         self.node, self.reader, self.writer = node, reader, writer
         self.link_scope, self.keepalive, self.timeout = link_scope, keepalive, timeout
-        self.expect, self.label, self.report = expect, label, report
+        self.expect, self.label, self.report, self.auth = expect, label, report, auth
         self.peer: str | None = None
         self.peer_vv: dict[str, int] = {}
         self.seen: set[tuple[str, int]] = set()   # (stream, seq) the peer has via this session
@@ -75,7 +85,9 @@ class Session:
         return msg
 
     async def _handshake(self) -> None:
+        nonce = os.urandom(16).hex()
         await self._send({"op": "hello", "proto": PROTO, "node": self.node.name,
+                          "id": keys.public_id(self.node.seed), "nonce": nonce,
                           "vv": self.node.store.version_vector()})
         msg = await self._recv()
         if msg["op"] != "hello" or msg.get("proto") != PROTO:
@@ -86,7 +98,31 @@ class Session:
         if self.peer == self.node.name:
             raise ProtocolError("linked to self")
         self.peer_vv = {str(k): int(v) for k, v in msg.get("vv", {}).items()}
-        log.info("linked with %s (%s scope)", self.peer, self.link_scope)
+        await self._send({"op": "auth", "sig": keys.sign(
+            self.node.seed, auth_message(str(msg.get("nonce", "")), self.node.name, self.peer))})
+        reply = await self._recv()
+        if reply["op"] == "error":
+            raise ProtocolError(f"peer refused link: {reply.get('reason', '')}")
+        if reply["op"] != "auth":
+            raise ProtocolError(f"expected auth, got {reply['op']}")
+        if self.auth:
+            try:
+                self._verify(str(msg.get("id", "")), auth_message(nonce, self.peer, self.node.name),
+                             str(reply.get("sig", "")))
+            except ProtocolError as err:
+                with contextlib.suppress(Exception):
+                    await self._send({"op": "error", "reason": str(err)})
+                raise
+        log.info("linked with %s (%s scope%s)", self.peer, self.link_scope,
+                 ", authenticated" if self.auth else "")
+
+    def _verify(self, claimed: str, message: bytes, sig: str) -> None:
+        from messnet.peers import load_peers
+        trusted = load_peers(self.node.cfg.etc).get(self.peer, {}).get("id")
+        if not trusted:
+            raise ProtocolError(f"authentication failed: {self.peer} has no id in the peer directory")
+        if claimed != trusted or not keys.verify(trusted, message, sig):
+            raise ProtocolError(f"authentication failed for {self.peer}")
 
     async def _push(self, ev: dict) -> None:
         if allowed(ev["scope"], self.link_scope) and not self._peer_has(ev):
@@ -115,6 +151,8 @@ class Session:
                 self._accept(msg.get("event"))
             elif msg["op"] == "bye":
                 return
+            elif msg["op"] == "error":
+                raise ProtocolError(f"peer refused link: {msg.get('reason', '')}")
             elif msg["op"] != "ping":
                 log.debug("ignoring unknown op from %s: %s", self.peer, msg["op"])
 
