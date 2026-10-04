@@ -45,13 +45,18 @@ def listen_specs(listen: list) -> list[dict]:
 
 def publish_self(node: Node) -> bool:
     """Write this node's peer file (its id plus ``advertise`` endpoints). True if changed."""
-    advertise = dict(node.cfg.advertise)
+    return publish_config(node.cfg)
+
+
+def publish_config(cfg) -> bool:
+    """Write the peer file for the node described by CFG. True if changed."""
+    nid = keys.public_id(keys.load_seed(cfg.key))
+    advertise = dict(cfg.advertise)
     if "iroh" in advertise:
-        from messnet.iroh_link import advertise_ids
         eps = advertise["iroh"]
-        advertise["iroh"] = advertise_ids(node, eps if isinstance(eps, list) else [eps])
-    extra = {"id": keys.public_id(keys.load_seed(node.cfg.key))}
-    return peers.publish_peer(node.cfg.etc, peers.peer_record(node.name, advertise, extra))
+        advertise["iroh"] = [{"id": nid, **{k: v for k, v in ep.items() if k != "id"}}
+                             for ep in (eps if isinstance(eps, list) else [eps])]
+    return peers.publish_peer(cfg.etc, peers.peer_record(cfg.node, advertise, {"id": nid}))
 
 
 def wants_iroh_listener(node: Node) -> bool:

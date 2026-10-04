@@ -82,7 +82,13 @@ def _apply(cfg: Config, values: dict) -> None:
         setattr(cfg, key, _coerce(key, value))
 
 
-def load_config(path: str | Path | None = None, **overrides) -> Config:
+def config_file(path: str | Path | None = None) -> Path:
+    """The config file to read / edit: PATH, else $MESSNET_CONFIG, else the XDG default."""
+    explicit = path or os.environ.get("MESSNET_CONFIG")
+    return Path(explicit).expanduser() if explicit else default_config_path()
+
+
+def load_config(path: str | Path | None = None, must_exist: bool = True, **overrides) -> Config:
     """Build the effective configuration.
 
     The config file is PATH, else $MESSNET_CONFIG, else the XDG default
@@ -99,7 +105,7 @@ def load_config(path: str | Path | None = None, **overrides) -> Config:
         values.pop("path", None)
         _apply(cfg, values)
         cfg.path = cpath
-    elif explicit:
+    elif explicit and must_exist:
         raise FileNotFoundError(f"config file not found: {cpath}")
     _apply(cfg, overrides)
     return cfg

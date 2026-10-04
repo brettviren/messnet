@@ -168,7 +168,11 @@ messnet link --stdio                 # serve protocol on stdin/stdout (for ssh)
 messnet serve -l HOST:PORT           # accept tcp links
 messnet connect tcp HOST:PORT | ssh ALIAS | cmd -- ARGV…
 messnet run                          # daemon: ingest, state, configured links
-messnet config                       # print effective configuration
+messnet config show [--file]         # effective configuration / raw file
+messnet config set|unset KEY [VALUE] # node, etc, spool, peers, ...
+messnet config add [--host N] KIND … # tcp|ssh|cmd|iroh|gonc method
+messnet config remove [--host N] KIND NUMBER|--all
+messnet config methods [--host N]    # show methods
 #+end_example
 
 * Phases

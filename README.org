@@ -82,6 +82,10 @@ messnet rebuild --yes          # rebuild the store from the spools
 
 * Configuration
 
+=messnet config= edits the file: =config set KEY VALUE=, =config add
+[--host NODE] KIND …= / =config remove= / =config methods= for
+connectivity, =config show [--file]=.  See =messnet config -h=.
+
 =~/.config/messnet/config.toml= (or =-c FILE=, =$MESSNET_CONFIG=).  Keys:
 =node=, =spool=, =local_spool=, =db=, =state=, =etc=, =key=, =secrets=,
 =poll=, =listen=, =links=, =peers=, =advertise=, =network=,

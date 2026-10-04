@@ -175,8 +175,3 @@ async def transport(node: Node) -> IrohTransport:
             node.iroh = await IrohTransport.open(node)
         return node.iroh
 
-
-def advertise_ids(node: Node, endpoints: list[dict]) -> list[dict]:
-    """Fill each advertised iroh endpoint's ``id`` with this node's id."""
-    nid = keys.public_id(keys.load_seed(node.cfg.key))
-    return [{"id": nid, **{k: v for k, v in ep.items() if k != "id"}} for ep in endpoints]

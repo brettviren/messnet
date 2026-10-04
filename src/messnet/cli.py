@@ -9,7 +9,8 @@ import sys
 import click
 
 from messnet import daemon, manager, netdetect, peers, state
-from messnet.config import load_config
+from messnet.cli_config import config_grp
+from messnet.config import config_file, load_config
 from messnet.event import EventError, default_source, dumps, parse_assignments
 from messnet.filters import parse_since
 from messnet.links import check_spec, keep_link, link_label, run_link, serve_tcp
@@ -68,9 +69,10 @@ def cli(ctx, config_path, node, spool, db, state, etc, network, verbose):
     if ctx.invoked_subcommand is None:
         click.echo(ctx.get_help())
         ctx.exit()
+    ctx.meta["config_file"] = config_file(config_path)
     try:
-        ctx.obj = load_config(config_path, node=node, spool=spool, db=db, state=state,
-                              etc=etc, network=network)
+        ctx.obj = load_config(config_path, must_exist=ctx.invoked_subcommand != "config",
+                              node=node, spool=spool, db=db, state=state, etc=etc, network=network)
     except (OSError, ValueError) as err:
         raise click.ClickException(str(err)) from err
 
@@ -147,13 +149,6 @@ def vv(ctx):
     """Print this node's version vector (stream -> contiguous seq)."""
     for key, seq in sorted(_node(ctx).store.version_vector().items()):
         click.echo(f"{key} {seq}")
-
-
-@cli.command("config", context_settings=CONTEXT)
-@click.pass_context
-def config_cmd(ctx):
-    """Print the effective configuration as JSON."""
-    click.echo(json.dumps(ctx.obj.as_dict(), indent=2))
 
 
 @cli.group("state", context_settings=CONTEXT, no_args_is_help=True)
@@ -409,3 +404,6 @@ def rebuild(ctx, yes):
     if not yes:
         raise click.UsageError("rebuild moves the store aside; pass --yes to confirm")
     click.echo(f"rebuilt store with {_node(ctx).rebuild()} events")
+
+
+cli.add_command(config_grp)

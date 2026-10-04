@@ -133,6 +133,9 @@ async def keep_link(node: Node, spec: dict, max_backoff: float = 60.0) -> None:
     """Run a link forever, reconnecting with exponential backoff."""
     label, delay = link_label(spec), 1.0
     while True:
+        if spec.get("peer") and node.linked(spec["peer"]):   # already linked some other way
+            await asyncio.sleep(5.0)
+            continue
         start = time.monotonic()
         try:
             await run_link(node, spec)
