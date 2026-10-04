@@ -1,0 +1,11 @@
+.claude
+.beads
+.venv
+*.egg-info
+*.py[oc]
+__pycache__
+.envrc
+.direnv
+dist
+wheels
+build

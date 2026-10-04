@@ -1,0 +1,129 @@
+#+title: messnet implementation plan
+
+* Goal
+
+A personal, multi-host, multi-producer / multi-consumer event network.
+Events are CloudEvents-style JSON objects.  Every host/account runs a
+messnet /node/ that keeps a local store of events and replicates it to
+peer nodes over whatever /links/ the current network policy allows:
+ssh stdio, plain TCP (tailscale, LAN, existing ssh tunnels), iroh,
+gonc, and Syncthing (as a slow, always-available path).
+
+* Core concepts
+
+- node :: one identity per host/account, named e.g. =hokum.bv=.  It
+  is the /origin/ of the events it emits.
+
+- event :: CloudEvents 1.0 JSON object (structured mode) with the
+  messnet extension attributes =origin=, =seq= and =scope=:
+
+  #+begin_src json
+  {"specversion":"1.0","id":"01J9…","time":"2026-10-04T12:00:00-04:00",
+   "source":"messnet://hokum/bv/backup","type":"backup.run.v1",
+   "subject":"push","scope":"all","origin":"hokum.bv","seq":42,
+   "data":{"phase":"push","result":"ok"}}
+  #+end_src
+
+  Events are sequenced per /stream/ =(origin, scope)=: =seq= increases
+  by one per event per stream and =(origin, scope, seq)= identifies an
+  event.  Per-scope streams mean a link that may not carry some scope
+  never sees seq gaps, so contiguous version vectors stay exact.  =id= is a ULID (time sortable).  =scope= is
+  one of =host= (never leaves the node), =lan=, =all=.
+
+- spool :: directory of append-only JSONL files,
+  =<spool>/<origin>/<YYYY-MM-DD>.jsonl=.  A node writes *only* its own
+  origin directory, so the spool may be shared by Syncthing with no
+  write conflicts.  The spool is the durable, human-readable record.
+  Only =all= events go to this (shareable) spool; =lan= and =host=
+  events go to a local unsynced spool =<local_spool>/<scope>/…=.
+
+- store :: local SQLite database (never synced) indexing every event
+  the node knows: its own, those ingested from the (Syncthing) spool,
+  and those received over live links.  Primary key =(origin, seq)=
+  gives deduplication for free.  It answers version vectors, queries,
+  replay and is polled for "new event" notification across processes.
+  It is a cache: it can be rebuilt from the spool.
+
+- state :: materialized "latest event per (type, origin, subject)" as
+  small JSON files under =<state>/<type>/<origin>/<subject>.json=.  UI
+  consumers (fish tide prompt, lemonbar) only ever read these files, so
+  they are fast and work offline.
+
+- link :: a bidirectional byte stream to a peer node carrying the
+  replication protocol.
+
+* Replication protocol (v1)
+
+Newline-delimited JSON frames over any bidirectional byte stream.
+
+1. Both sides send ={"op":"hello","proto":1,"node":N,"vv":{"origin/scope": seq}}=
+   where =vv= is the version vector of /contiguous/ maxima.
+2. Each side sends every event it has with =seq > peer.vv[stream]=
+   allowed by the link's scope, as ={"op":"event","event":{…}}=.
+   A =lan= link carries =lan= and =all= streams, an =all= link only
+   =all= streams; =host= streams never leave the node.
+3. Then each side live-pushes newly stored events (found by polling
+   the store rowid), skipping events the peer is known to have.
+4. Received events are inserted with dedupe; they become visible to
+   all other links' pollers, giving multi-hop store-and-forward.
+5. ={"op":"ping"}= keepalive.
+
+Authentication is delegated to the link (ssh keys, tailnet ACL, iroh
+endpoint id, gonc PSK) in v1; a signed handshake for raw TCP comes in a
+later phase.
+
+* Layout
+
+| module          | role                                                   |
+|-----------------+--------------------------------------------------------|
+| =ulid.py=       | ULID generation                                        |
+| =config.py=     | XDG + layered config (env → file → CLI)                |
+| =event.py=      | build / validate / parse events, =k=v= data parsing    |
+| =spool.py=      | JSONL spool: append own events, incremental reading    |
+| =store.py=      | SQLite store: insert, query, version vector, cursors   |
+| =node.py=       | composition: emit, ingest, follow                      |
+| =state.py=      | materialized latest-state files                        |
+| =filters.py=    | type glob and time ("1d", ISO) filters                 |
+| =replicate.py=  | protocol session over asyncio streams                  |
+| =links.py=      | stdio / tcp / subprocess(ssh, gonc, …) links, backoff  |
+| =daemon.py=     | =run=: ingest loop, state updates, link supervisor     |
+| =cli.py=        | Click commands only                                    |
+
+* CLI
+
+#+begin_example
+messnet emit TYPE [k=v|k:=json ...] [-s SUBJECT] [--scope S] [--producer P]
+messnet emit --stdin                 # JSON lines with at least "type"
+messnet tail [-t GLOB] [--since 1d] [-f] [--origin O]
+messnet state get [GLOB]             # print materialized state
+messnet state update                 # rebuild state files from store
+messnet ingest                       # scan spool into store
+messnet vv                           # print version vector
+messnet link --stdio                 # serve protocol on stdin/stdout (for ssh)
+messnet serve -l HOST:PORT           # accept tcp links
+messnet connect tcp HOST:PORT | ssh ALIAS | cmd -- ARGV…
+messnet run                          # daemon: ingest, state, configured links
+messnet config                       # print effective configuration
+#+end_example
+
+* Phases
+
+1. [X] Spool, store, envelope; =emit=, =tail=, =ingest=, =state=, =vv=, =config=.
+2. [X] Replicator + stdio / tcp / subprocess links; =link=, =serve=,
+   =connect=, =run= with configured links and reconnect backoff.
+3. [ ] Peer directory (=etc/peers/<node>.toml= written by each node,
+   shared by Syncthing) and network profiles (=etc/networks/*.toml=:
+   detection rules → allowed links in preference order, max scope).
+   Link manager selects links from these.  =messnet links= status.
+4. [ ] iroh link (optional extra =messnet[iroh]=): relay disabled or
+   self-hosted, static discovery from the peer directory, ALPN
+   =messnet/1=; node key reused as iroh endpoint id.
+5. [ ] gonc link presets per network profile (direct / SOCKS5 relay;
+   P2P only where public rendezvous is permitted).
+6. [ ] Hardening: signed TCP handshake, optional event signatures,
+   spool retention/compaction, version-vector audit, store rebuild.
+
+Producers / consumers (separate track, start after phase 1):
+=~/scripts/backup= emit, fish tide item reading state, cron wrapper
+(=messnet wrap -- cmd=), arbtt adapter, fish postexec (=scope=host=),
+ntfy forwarder, DuckDB report, announce/heartbeat events.

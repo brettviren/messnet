@@ -1,0 +1,62 @@
+#+title: messnet
+
+A personal, multi-host event notification network.  Producers (scripts,
+cron jobs, shell hooks, adapters) emit small CloudEvents-style JSON
+events; consumers (prompts, panels, reports) read them.  Each
+host/account runs a node that replicates events to peers over whatever
+links a network allows: ssh, TCP (tailscale, LAN, ssh tunnels), any
+stdio command (e.g. gonc), and a Syncthing-shared spool.
+
+See [[file:docs/plan.org]] for design and roadmap.
+
+* Quick start
+
+#+begin_example
+uv sync
+uv run messnet emit backup.run.v1 -s push result=ok n:=3
+uv run messnet tail -t 'backup.*' --format text
+uv run messnet state update
+uv run messnet state get 'backup.*'
+#+end_example
+
+* Concepts
+
+- events :: JSON with CloudEvents attributes plus =origin=, =scope= and
+  =seq=.  Data comes from =key=value= (string) or =key:=json= arguments,
+  =-d JSON=, or JSON lines on stdin (=emit --stdin=).
+- scope :: =host= (never leaves the node), =lan= (only over =lan=
+  links), =all= (anywhere, including the shared spool).
+- spool :: =all= events are appended to =<spool>/<origin>/<date>.jsonl=.
+  Point =spool= at a Syncthing folder to share; each node writes only
+  its own directory.  =lan= / =host= events go to a local, unsynced spool.
+- store :: local SQLite index of everything known (rebuildable).
+- state :: newest event per =(type, origin, subject)= as
+  =<state>/<type>/<origin>/<subject>.json= — read these from prompts
+  and panels; they work offline and need no messnet process.
+
+* Linking nodes
+
+#+begin_example
+messnet serve -l 100.96.203.121:7701 --scope lan     # accept TCP links
+messnet connect tcp hokum:7701 --scope lan -k        # link, reconnect forever
+messnet connect ssh hokum -k                         # runs 'messnet link --stdio' remotely
+messnet connect cmd -k -- gonc ...                   # any stdio transport
+messnet run                                          # daemon from config.toml
+#+end_example
+
+* Configuration
+
+=~/.config/messnet/config.toml= (or =-c FILE=, =$MESSNET_CONFIG=).  Keys:
+=node=, =spool=, =local_spool=, =db=, =state=, =poll=, =listen=, =links=.
+Scalars may also be set by =MESSNET_<KEY>= environment variables.
+
+#+begin_src toml
+node = "hokum.bv"
+spool = "~/sync/messnet/spool"
+listen = [{addr = "100.96.203.121:7701", scope = "lan"}]
+
+[[links]]
+kind = "ssh"          # ssh | tcp | cmd
+target = "haiku"
+scope = "all"
+#+end_src
