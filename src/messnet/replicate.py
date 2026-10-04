@@ -228,8 +228,9 @@ class Session:
             if registered:
                 self.node.sessions[self.peer] -= 1
                 self._status("down", error)
-            log.info("unlinked from %s: sent %d, received %d new",
-                     self.peer, self.sent, self.received)
+            if self.peer:
+                log.info("unlinked from %s: sent %d, received %d new",
+                         self.peer, self.sent, self.received)
             with contextlib.suppress(Exception):
                 self.writer.close()
                 await self.writer.wait_closed()

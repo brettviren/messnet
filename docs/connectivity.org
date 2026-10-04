@@ -1,0 +1,329 @@
+#+title: messnet connectivity walkthrough
+
+This guide connects two hosts, *alpha* and *beta*, with each method
+messnet supports, using one test message: the output of =date=.  Each
+method section is independent; do [[*Common setup]] first, then pick any.
+
+* How messnet works (the short version)
+
+- Every host/account runs a messnet *node* with a name (=alpha=, =beta=).
+- =messnet emit= creates an *event* (a JSON object) and stores it locally.
+  Events are kept in a local database and, for events that may leave the
+  host, in a *spool* of JSONL files.
+- A *link* connects two nodes.  When a link opens, each side sends the
+  events the other is missing, then forwards new ones as they happen.
+  Events sent before a link existed are delivered when it opens.
+- =messnet connect …= opens one link and runs until it closes (stop with
+  Ctrl-C; add =-k= to reconnect forever).  =messnet run= is the long
+  running daemon that opens links from the config file.
+- =messnet tail= prints events a node has.
+
+* Common setup
+
+Do this on *both* hosts.
+
+1. Install messnet (needs =uv=).  =--with iroh= is only needed for the
+   iroh method.
+   #+begin_example
+   git clone <messnet repo> ~/dev/messnet
+   uv tool install -e ~/dev/messnet --with iroh
+   messnet -h
+   #+end_example
+
+2. Create a shared folder for peer files.  Easiest: a Syncthing folder
+   shared by both hosts, e.g. =~/sync/messnet=.  (Without Syncthing, copy
+   files by hand as shown in step 4.)
+
+3. Write =~/.config/messnet/config.toml=.  On alpha:
+   #+begin_src toml
+   node = "alpha"
+   etc = "~/sync/messnet/etc"
+   #+end_src
+   On beta the same with =node = "beta"=.
+
+4. Publish each node's identity (its public key) to the shared folder:
+   #+begin_example
+   messnet peers publish        # writes ~/sync/messnet/etc/peers/<node>.toml
+   messnet peers list           # after syncing, both alpha and beta appear
+   #+end_example
+   Without Syncthing, copy the files across, e.g. on beta:
+   =scp alpha:sync/messnet/etc/peers/alpha.toml ~/sync/messnet/etc/peers/= and
+   the reverse on alpha.  Re-publish and re-copy whenever =advertise=
+   (below) changes.
+
+5. Emit the test message on alpha and check it locally:
+   #+begin_example
+   alpha$ messnet emit demo.date.v1 now="$(date)"
+   alpha$ messnet tail -t 'demo.*' --format text
+   2026-10-04T15:20:32.788-04:00 alpha demo.date.v1 - {"now": "Sun Oct  4 03:20:32 PM EDT 2026"}
+   #+end_example
+
+Success for every method below means the same line appears on beta:
+#+begin_example
+beta$ messnet tail -t 'demo.*' --format text
+#+end_example
+Use =messnet -v …= to see link activity, and =messnet tail -f …= to watch
+new events arrive.
+
+* Method 1: Syncthing spool (no links)
+
+Events are exchanged as files.  Slow (Syncthing's delay, roughly
+10-60 s) but works anywhere Syncthing does and needs no daemon.
+
+On both hosts add to =config.toml=:
+#+begin_src toml
+spool = "~/sync/messnet/spool"
+#+end_src
+Then:
+#+begin_example
+alpha$ messnet emit demo.date.v1 now="$(date)" via=syncthing
+# wait for Syncthing to sync ~/sync/messnet/spool/alpha/
+beta$  messnet tail -t 'demo.*' --format text     # tail reads new spool files first
+#+end_example
+Only events with the default =--scope all= go to this spool.
+
+* Method 2: direct TCP (LAN, Tailscale, or an ssh tunnel)
+
+Needs beta to reach a TCP port on alpha.  TCP links are authenticated:
+both peer files from [[*Common setup]] step 4 must be present on both hosts.
+Replace =ALPHA_IP= with alpha's LAN or Tailscale address.
+
+One-shot:
+#+begin_example
+alpha$ messnet serve -l ALPHA_IP:7701
+beta$  messnet -v connect tcp ALPHA_IP:7701
+messnet: INFO linked with alpha (all scope, authenticated)
+beta$  messnet tail -t 'demo.*' --format text     # in another terminal
+#+end_example
+
+Persistent: on alpha add
+#+begin_src toml
+listen = ["ALPHA_IP:7701"]
+#+end_src
+on beta add
+#+begin_src toml
+[[links]]
+kind = "tcp"
+addr = "ALPHA_IP:7701"
+#+end_src
+and run =messnet run= on both.  =beta$ messnet links= shows
+=alpha up … tcp:ALPHA_IP:7701=.
+
+Through an ssh tunnel (when only ssh reaches alpha): alpha listens on
+=127.0.0.1:7701=, beta forwards a local port and links to it:
+#+begin_example
+alpha$ messnet serve -l 127.0.0.1:7701
+beta$  ssh -N -L 7701:127.0.0.1:7701 alpha &
+beta$  messnet connect tcp 127.0.0.1:7701
+#+end_example
+
+* Method 3: ssh
+
+beta runs =messnet link --stdio= on alpha over ssh.  Nothing needs to
+run on alpha beforehand.  Requires non-interactive ssh (keys or agent).
+
+#+begin_example
+beta$ messnet -v connect ssh alpha
+messnet: INFO linked with alpha (all scope)
+#+end_example
+
+If =messnet= is not on alpha's =PATH= for non-interactive ssh, give the
+remote command explicitly:
+#+begin_example
+beta$ messnet connect ssh alpha --command '~/.local/bin/messnet link --stdio'
+#+end_example
+
+Persistent, on beta (then =messnet run=):
+#+begin_src toml
+[[links]]
+kind = "ssh"
+target = "alpha"                                # any ssh alias or user@host
+command = "~/.local/bin/messnet link --stdio"   # optional
+#+end_src
+
+* Method 4: any stdio command
+
+Any command whose stdin/stdout reach =messnet link --stdio= on the peer
+works, e.g. ssh through a jump host, or =socat=:
+#+begin_example
+beta$ messnet connect cmd -- ssh -J jumphost alpha messnet link --stdio
+#+end_example
+Persistent, on beta:
+#+begin_src toml
+[[links]]
+kind = "cmd"
+argv = ["ssh", "-J", "jumphost", "alpha", "messnet", "link", "--stdio"]
+#+end_src
+
+* Method 5: iroh
+
+QUIC (UDP), dialed by node id.  messnet uses no public iroh services:
+relays are off unless you configure your own.  Requires =--with iroh= at
+install.  Open UDP port 7702 on alpha if a firewall is in the way.
+
+On alpha add (then =messnet peers publish= and copy/sync the peer file):
+#+begin_src toml
+iroh = {bind = "0.0.0.0:7702"}
+
+[advertise]
+iroh = [{addrs = ["ALPHA_IP:7702"]}]
+#+end_src
+Run alpha's daemon, which accepts iroh links:
+#+begin_example
+alpha$ messnet id                   # prints alpha's id, e.g. e34667b6…
+alpha$ messnet run
+#+end_example
+Link from beta (beta's peer file must be on alpha: alpha only accepts
+known ids):
+#+begin_example
+beta$ messnet -v connect iroh e34667b6… -a ALPHA_IP:7702
+messnet: INFO linked with alpha (all scope)
+#+end_example
+Instead of copying the id, let beta follow the peer directory (see
+[[*Method 7: managed peers and network profiles]]).
+
+With a self-hosted relay, add =relays = ["https://relay.example.org"]= to
+=iroh= on both hosts and =relay = "https://relay.example.org"= to alpha's
+advertised entry.  The relay speaks HTTP(S) over TCP, so a host without
+UDP can reach it through =ssh -L=.
+
+* Method 6: gonc
+
+[[https://github.com/threatexpert/gonc][gonc]] provides encrypted TCP or NAT-traversing P2P.  Install the =gonc=
+binary on both hosts (or set =gonc_bin = "/path/to/gonc"= in the config).
+
+Create a shared secret on alpha and copy it to beta securely.  gonc
+rejects weak secrets.  The secret is never put in a synced folder.
+#+begin_example
+alpha$ mkdir -p ~/.config/messnet/secrets
+alpha$ head -c 24 /dev/urandom | base64 > ~/.config/messnet/secrets/alpha-beta
+alpha$ chmod 600 ~/.config/messnet/secrets/alpha-beta
+alpha$ scp ~/.config/messnet/secrets/alpha-beta beta:.config/messnet/secrets/
+#+end_example
+
+** TCP mode (TLS with the secret; beta must reach alpha's port)
+
+On alpha add, then =messnet run=:
+#+begin_src toml
+[[gonc_serve]]
+mode = "tcp"
+secret = "alpha-beta"
+addr = "0.0.0.0:7703"
+#+end_src
+On beta:
+#+begin_example
+beta$ messnet -v connect gonc --mode tcp --secret alpha-beta --addr ALPHA_IP:7703
+#+end_example
+
+** P2P mode (NAT traversal; needs two separate hosts)
+
+On alpha add, then =messnet run=:
+#+begin_src toml
+[[gonc_serve]]
+secret = "alpha-beta"
+lan = true                       # same LAN: local broadcast discovery only
+# For hosts on different networks, instead of lan = true use your own
+# rendezvous servers:
+# mqttsrv = "tcp://mqtt.example.org:1883"
+# stunsrv = "stun.example.org:3478"
+# With neither lan nor mqttsrv/stunsrv, gonc uses public servers.
+#+end_src
+On beta, matching options:
+#+begin_example
+beta$ messnet -v connect gonc --secret alpha-beta --lan
+beta$ messnet -v connect gonc --secret alpha-beta \
+          --mqttsrv tcp://mqtt.example.org:1883 --stunsrv stun.example.org:3478
+#+end_example
+
+Persistent on beta (then =messnet run=), using the same fields:
+#+begin_src toml
+[[links]]
+kind = "gonc"
+secret = "alpha-beta"
+mode = "tcp"
+addr = "ALPHA_IP:7703"
+#+end_src
+
+* Method 7: managed peers and network profiles
+
+Instead of fixed =[[links]]=, alpha advertises how it can be reached and
+beta picks a method allowed on the network it is on.
+
+On alpha, advertise any of the endpoints from the methods above, then
+=messnet peers publish= and =messnet run=:
+#+begin_src toml
+listen = ["ALPHA_IP:7701"]
+iroh = {bind = "0.0.0.0:7702"}
+
+[advertise]
+tcp = [{addr = "ALPHA_IP:7701"}]
+ssh = [{target = "alpha"}]
+iroh = [{addrs = ["ALPHA_IP:7702"]}]
+#+end_src
+On beta add:
+#+begin_src toml
+peers = ["alpha"]        # or "*" for every node in the peer directory
+#+end_src
+Optionally describe networks in =~/sync/messnet/etc/networks/=.  Without
+any, the built-in default allows tcp, ssh and cmd.  Example
+=home.toml=:
+#+begin_src toml
+detect = {domain = "home.local"}   # see: messnet net --facts
+links = ["tcp", "iroh", "ssh"]     # allowed, in order of preference
+scope = "lan"
+#+end_src
+and =default.toml= for every other network:
+#+begin_src toml
+links = ["ssh", "iroh"]
+#+end_src
+Check, then run:
+#+begin_example
+beta$ messnet net                  # which profile matches here
+beta$ messnet peers plan           # links beta would try, in order
+network: home links=tcp,iroh,ssh scope=lan
+alpha:
+  all tcp:ALPHA_IP:7701
+  all iroh:e34667b6b1
+  all ssh:alpha
+beta$ messnet run
+beta$ messnet links
+alpha                up   2026-10-04T15:21:34.106-04:00 tcp:ALPHA_IP:7701
+#+end_example
+beta uses the first link that connects, falls back down the list on
+failure, and re-plans when the network or the peer files change.
+
+* Keeping it running
+
+A systemd user unit for the daemon, on each host:
+#+begin_example
+# ~/.config/systemd/user/messnet.service
+[Unit]
+Description=messnet node
+
+[Service]
+ExecStart=%h/.local/bin/messnet run
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+#+end_example
+#+begin_example
+systemctl --user daemon-reload && systemctl --user enable --now messnet
+journalctl --user -u messnet -f
+#+end_example
+
+* Troubleshooting
+
+- =authentication failed= / =peer refused link= :: a TCP or iroh peer
+  file is missing or stale on the accepting host.  Run =messnet peers
+  publish= on the dialer and sync/copy =etc/peers/<node>.toml=.
+- =expected peer X, reached Y= :: the address or alias reaches a
+  different node than the one listed.
+- Nothing arrives :: check the link with =messnet -v connect …= or
+  =messnet links=; compare =messnet vv= on both hosts (per-node event
+  counts); =messnet gaps= lists missing events.
+- =lan= or =host= events missing :: =--scope host= never leaves the host;
+  =--scope lan= only crosses links with =--scope lan= (=connect … --scope
+  lan=, =scope = "lan"= in =listen= / =[[links]]= / advertised endpoints).
+- Ports :: 7701/tcp (messnet TCP), 7702/udp (iroh), 7703/tcp (gonc TCP)
+  in these examples; any free ports work.

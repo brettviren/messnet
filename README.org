@@ -7,7 +7,9 @@ host/account runs a node that replicates events to peers over whatever
 links a network allows: ssh, TCP (tailscale, LAN, ssh tunnels), any
 stdio command (e.g. gonc), and a Syncthing-shared spool.
 
-See [[file:docs/plan.org]] for design and roadmap.
+See [[file:docs/connectivity.org]] for a step-by-step guide to connecting
+hosts with each supported method, and [[file:docs/plan.org]] for design
+and roadmap.
 
 * Quick start
 

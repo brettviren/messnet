@@ -40,11 +40,11 @@ def parse_addr(addr: str, default_host: str = "127.0.0.1") -> tuple[str, int]:
 
 
 def ssh_argv(target: str, command: list[str] | str | None = None) -> list[str]:
+    """A string COMMAND is passed to the remote shell verbatim (so ~ and $VARS expand)."""
     remote = command or REMOTE_COMMAND
-    if isinstance(remote, str):
-        remote = shlex.split(remote)
-    return ["ssh", "-T", "-o", "BatchMode=yes", "-o", "ServerAliveInterval=30", target,
-            shlex.join(remote)]
+    if not isinstance(remote, str):
+        remote = shlex.join(remote)
+    return ["ssh", "-T", "-o", "BatchMode=yes", "-o", "ServerAliveInterval=30", target, remote]
 
 
 def link_argv(spec: dict, cfg=None) -> list[str] | None:

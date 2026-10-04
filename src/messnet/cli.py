@@ -280,6 +280,25 @@ def connect_iroh(ctx, id, addrs, relay, scope, keep):
     _connect(ctx, spec, keep)
 
 
+@connect.command("gonc", context_settings=CONTEXT, no_args_is_help=True)
+@click.option("--secret", required=True, help="Secret file name in the local secrets directory.")
+@click.option("--mode", type=click.Choice(["tcp", "p2p"]), default="p2p", show_default=True)
+@click.option("--addr", help="tcp mode: the responder's HOST:PORT.")
+@click.option("--lan", is_flag=True, help="p2p mode: LAN broadcast discovery only.")
+@click.option("--mqttsrv", help="p2p mode: rendezvous MQTT server(s), comma separated.")
+@click.option("--stunsrv", help="p2p mode: STUN server(s), comma separated.")
+@_scope_opt
+@_keep_opt
+@click.pass_context
+def connect_gonc(ctx, secret, mode, addr, lan, mqttsrv, stunsrv, scope, keep):
+    """Link over gonc to a peer running a matching gonc_serve responder."""
+    spec = {"kind": "gonc", "secret": secret, "mode": mode, "scope": scope}
+    for key, value in (("addr", addr), ("lan", lan), ("mqttsrv", mqttsrv), ("stunsrv", stunsrv)):
+        if value:
+            spec[key] = value
+    _connect(ctx, spec, keep)
+
+
 @cli.command("id", context_settings=CONTEXT)
 @click.pass_context
 def id_cmd(ctx):

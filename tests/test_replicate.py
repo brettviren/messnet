@@ -151,3 +151,10 @@ def test_session_seen_folds_into_vv(make_node):
     s._mark(ev(2))
     assert s.peer_vv == {"x/all": 4} and s.seen == set()
     assert s._peer_has(ev(4)) and not s._peer_has(ev(5))
+
+
+def test_ssh_argv_command_quoting():
+    from messnet.links import ssh_argv
+    assert ssh_argv("h")[-1] == "messnet link --stdio"
+    assert ssh_argv("h", "~/.local/bin/messnet link --stdio")[-1] == "~/.local/bin/messnet link --stdio"
+    assert ssh_argv("h", ["a b", "c"])[-1] == "'a b' c"
