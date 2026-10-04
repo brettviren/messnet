@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from datetime import date, timedelta
 
 from messnet import keys, manager, peers, state
 from messnet.links import check_spec, keep_link, serve_tcp, stdio_streams
@@ -11,15 +12,27 @@ from messnet.replicate import Session
 log = logging.getLogger(__name__)
 
 
-def maintain_once(node: Node) -> tuple[int, int]:
+FULL_SCAN = 60.0   # seconds between scans of all spool files (others scan recent files only)
+
+
+def recent_date(days: int = 2) -> str:
+    return (date.today() - timedelta(days=days)).isoformat()
+
+
+def maintain_once(node: Node, full: bool = True) -> tuple[int, int]:
     """Ingest the spool and update state files. Return (new events, state files written)."""
-    return node.ingest(), state.update(node.store, node.cfg.state)
+    return node.ingest("" if full else recent_date()), state.update(node.store, node.cfg.state)
 
 
 async def maintain(node: Node) -> None:
+    loop = asyncio.get_running_loop()
+    last_full = -FULL_SCAN
     while True:
+        full = loop.time() - last_full >= FULL_SCAN
         try:
-            maintain_once(node)
+            maintain_once(node, full)
+            if full:
+                last_full = loop.time()
         except Exception as err:
             log.warning("maintenance failed: %s", err)
         await asyncio.sleep(node.cfg.poll)

@@ -138,3 +138,16 @@ def test_expected_peer_mismatch(make_node):
             server.close()
 
     asyncio.run(main())
+
+
+def test_session_seen_folds_into_vv(make_node):
+    from messnet.replicate import Session
+    a = make_node("a")
+    s = Session(a, None, None)
+    ev = lambda n: {"origin": "x", "scope": "all", "seq": n}
+    for n in (3, 1, 4):
+        s._mark(ev(n))
+    assert s.peer_vv == {"x/all": 1} and s.seen == {("x/all", 3), ("x/all", 4)}
+    s._mark(ev(2))
+    assert s.peer_vv == {"x/all": 4} and s.seen == set()
+    assert s._peer_has(ev(4)) and not s._peer_has(ev(5))

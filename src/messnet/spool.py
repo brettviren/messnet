@@ -36,33 +36,40 @@ class Spool:
             fp.write(dumps(ev) + "\n")
         return path
 
-    def origin_files(self, origin: str) -> list[Path]:
+    def origin_files(self, origin: str, since: str = "") -> list[Path]:
+        """ORIGIN's log files, oldest first; SINCE ("YYYY-MM-DD") skips older dates."""
         odir = self.origin_dir(origin)
         if not odir.is_dir():
             return []
-        return sorted(p for p in odir.iterdir() if _LOGNAME.match(p.name))
+        return sorted(p for p in odir.iterdir() if _LOGNAME.match(p.name) and p.name >= since)
 
-    def files(self) -> list[Path]:
-        """All log files of all origins (Syncthing temp and conflict files excluded)."""
+    def files(self, since: str = "") -> list[Path]:
+        """Log files of all origins (Syncthing temp and conflict files excluded)."""
         if not self.root.is_dir():
             return []
         out = []
         for odir in sorted(self.root.iterdir()):
             if odir.is_dir() and not odir.name.startswith("."):
-                out.extend(self.origin_files(odir.name))
+                out.extend(self.origin_files(odir.name, since))
         return out
 
     def last_seq(self, origin: str) -> int:
-        """Highest seq found in the last complete line of ORIGIN's newest non-empty log."""
-        for path in reversed(self.origin_files(origin)):
+        """Highest seq among the last lines of ORIGIN's logs.
+
+        Every file is checked since events with a past ``time`` are appended
+        to older dated files.  Seqs only grow within a file.
+        """
+        top = 0
+        for path in self.origin_files(origin):
             line = _last_line(path)
-            if line:
-                try:
-                    return int(json.loads(line)["seq"])
-                except (ValueError, KeyError, TypeError):
-                    log.warning("unparsable last line in %s", path)
-                    return max((ev["seq"] for ev, _ in read_from(path, 0)), default=0)
-        return 0
+            if not line:
+                continue
+            try:
+                top = max(top, int(json.loads(line)["seq"]))
+            except (ValueError, KeyError, TypeError):
+                log.warning("unparsable last line in %s", path)
+                top = max(top, max((ev["seq"] for ev, _ in read_from(path, 0)), default=0))
+        return top
 
 
 def _last_line(path: Path, chunk: int = 8192) -> bytes:

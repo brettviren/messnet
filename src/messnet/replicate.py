@@ -58,7 +58,9 @@ class Session:
         self.expect, self.label, self.report, self.auth = expect, label, report, auth
         self.peer: str | None = None
         self.peer_vv: dict[str, int] = {}
-        self.seen: set[tuple[str, int]] = set()   # (stream, seq) the peer has via this session
+        # (stream, seq) the peer has beyond its contiguous peer_vv; stays small since
+        # contiguous seqs are folded into peer_vv as they are sent or received.
+        self.seen: set[tuple[str, int]] = set()
         self.sent = self.received = 0
 
     def _peer_has(self, ev: dict) -> bool:
@@ -66,7 +68,18 @@ class Session:
         return ev["seq"] <= self.peer_vv.get(key, 0) or (key, ev["seq"]) in self.seen
 
     def _mark(self, ev: dict) -> None:
-        self.seen.add((stream_key(ev["origin"], ev["scope"]), ev["seq"]))
+        key, seq = stream_key(ev["origin"], ev["scope"]), ev["seq"]
+        top = self.peer_vv.get(key, 0)
+        if seq <= top:
+            return
+        if seq != top + 1:
+            self.seen.add((key, seq))
+            return
+        top = seq
+        while (key, top + 1) in self.seen:
+            top += 1
+            self.seen.discard((key, top))
+        self.peer_vv[key] = top
 
     async def _send(self, msg: dict) -> None:
         self.writer.write((json.dumps(msg, separators=(",", ":"), ensure_ascii=False) + "\n").encode())

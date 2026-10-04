@@ -57,10 +57,13 @@ class Node:
         attrs = {k: obj[k] for k in _SETTABLE if k in obj}
         return self.emit(obj["type"], **attrs)
 
-    def ingest(self) -> int:
-        """Scan spool files for new complete lines; store new events. Return count new."""
+    def ingest(self, since: str = "") -> int:
+        """Scan spool files for new complete lines; store new events. Return count new.
+
+        SINCE ("YYYY-MM-DD") limits the scan to log files of that date or later.
+        """
         count = 0
-        for scope, path in ((sc, p) for sc, sp in self.spools.items() for p in sp.files()):
+        for scope, path in ((sc, p) for sc, sp in self.spools.items() for p in sp.files(since)):
             offset, size = self.store.file_offset(path), path.stat().st_size
             if size == offset:
                 continue

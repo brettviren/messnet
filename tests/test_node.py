@@ -82,3 +82,19 @@ def test_emit_object(make_node):
     n = make_node("a")
     ev = n.emit_object({"type": "x.v1", "data": [1], "subject": "s", "seq": 99, "origin": "evil"})
     assert (ev["origin"], ev["seq"], ev["data"]) == ("a", 1, [1])
+
+
+def test_ingest_since_skips_old_files(make_node, tmp_path):
+    shared = tmp_path / "sync"
+    a, b = make_node("a", spool=shared), make_node("b", spool=shared)
+    a.emit("old.v1", time="2020-01-01T00:00:00+00:00")
+    a.emit("new.v1")
+    assert b.ingest(since="2021-01-01") == 1
+    assert b.ingest() == 1
+
+
+def test_seq_recovery_with_backdated_events(make_node):
+    n = make_node("a")
+    n.emit("now.v1")
+    n.emit("past.v1", time="2020-01-01T00:00:00+00:00")
+    assert n.spools["all"].last_seq("a") == 2
