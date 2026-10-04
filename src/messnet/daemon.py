@@ -3,7 +3,7 @@
 import asyncio
 import logging
 
-from messnet import manager, peers, state
+from messnet import keys, manager, peers, state
 from messnet.links import check_spec, keep_link, serve_tcp, stdio_streams
 from messnet.node import Node
 from messnet.replicate import Session
@@ -34,7 +34,17 @@ def publish_self(node: Node) -> bool:
     """Write this node's peer file from its ``advertise`` config. True if changed."""
     if not node.cfg.advertise:
         return False
-    return peers.publish_peer(node.cfg.etc, peers.peer_record(node.name, node.cfg.advertise))
+    advertise = dict(node.cfg.advertise)
+    if "iroh" in advertise:
+        from messnet.iroh_link import advertise_ids
+        eps = advertise["iroh"]
+        advertise["iroh"] = advertise_ids(node, eps if isinstance(eps, list) else [eps])
+    extra = {"id": keys.public_id(keys.load_seed(node.cfg.key))}
+    return peers.publish_peer(node.cfg.etc, peers.peer_record(node.name, advertise, extra))
+
+
+def wants_iroh_listener(node: Node) -> bool:
+    return node.cfg.iroh.get("listen", "iroh" in node.cfg.advertise)
 
 
 async def run(node: Node) -> None:
@@ -47,11 +57,19 @@ async def run(node: Node) -> None:
     tasks += [asyncio.create_task(keep_link(node, spec)) for spec in specs]
     if node.cfg.peers:
         tasks.append(asyncio.create_task(manager.manage(node)))
+    if wants_iroh_listener(node):
+        from messnet import iroh_link
+        tasks.append(asyncio.create_task((await iroh_link.transport(node)).serve()))
     try:
         await asyncio.gather(*tasks)
     finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
         for server in servers:
             server.close()
+        if node.iroh:
+            await node.iroh.close()
 
 
 async def run_stdio(node: Node, scope: str = "all", maintained: bool = True) -> None:

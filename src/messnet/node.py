@@ -1,5 +1,6 @@
 """A messnet node: composes config, spool and store into emit / ingest / follow."""
 
+import asyncio
 import logging
 import time
 from collections.abc import Iterator
@@ -26,6 +27,8 @@ class Node:
         self.store = Store(cfg.db)
         self.sessions: dict[str, int] = {}   # peer name -> number of live sessions
         self.profile_scope = "lan"            # widest link scope allowed; set by the link manager
+        self.iroh = None                      # iroh transport, opened on first use
+        self.iroh_lock = asyncio.Lock()
 
     def linked(self, peer: str) -> bool:
         return self.sessions.get(peer, 0) > 0

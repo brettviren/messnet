@@ -265,6 +265,29 @@ def connect_cmd(ctx, argv, scope, keep):
     _connect(ctx, {"kind": "cmd", "argv": list(argv), "scope": scope}, keep)
 
 
+@connect.command("iroh", context_settings=CONTEXT, no_args_is_help=True)
+@click.argument("id")
+@click.option("-a", "--addr", "addrs", multiple=True, help="Direct HOST:PORT address of the peer (repeatable).")
+@click.option("--relay", help="Relay URL the peer uses.")
+@_scope_opt
+@_keep_opt
+@click.pass_context
+def connect_iroh(ctx, id, addrs, relay, scope, keep):
+    """Link over iroh to the node with endpoint ID."""
+    spec = {"kind": "iroh", "id": id, "addrs": list(addrs), "scope": scope}
+    if relay:
+        spec["relay"] = relay
+    _connect(ctx, spec, keep)
+
+
+@cli.command("id", context_settings=CONTEXT)
+@click.pass_context
+def id_cmd(ctx):
+    """Print this node's id (public key; also its iroh endpoint id)."""
+    from messnet import keys
+    click.echo(keys.public_id(keys.load_seed(ctx.obj.key)))
+
+
 @cli.command(context_settings=CONTEXT)
 @click.pass_context
 def run(ctx):

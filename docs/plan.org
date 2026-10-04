@@ -91,6 +91,24 @@ later phase.
   changes, does not dial a peer that is already linked, and narrows
   inbound listener scope to the current profile scope.
 
+* Node identity and iroh
+
+- =node.key= holds a 32 byte ed25519 seed (mode 0600).  Its public key
+  in hex is the node id (=messnet id=), written to the node's peer file
+  as =id=, and it is also the node's iroh endpoint id.
+- iroh config table: =bind= (=HOST:PORT=, fix the port so advertised
+  addresses stay valid), =relays= (self-hosted relay URLs; empty means
+  relaying is disabled), =listen= (default: true if iroh is advertised),
+  =scope= (widest inbound scope), =allow= (="any"= to accept endpoints
+  not in the peer directory).
+- The endpoint uses iroh's minimal preset: no n0 discovery, DNS or relays.
+  Peers are dialed by id + direct =addrs= (+ optional =relay=) from their
+  peer file =[[iroh]]= entries; the id is filled in automatically.
+- Inbound iroh links are accepted only from endpoint ids in the peer
+  directory, and the hello must name the node owning that id.
+- A self-hosted =iroh-relay= serves HTTP(S) over TCP, so a node with no
+  UDP can reach it through an ssh =-L= forward listed in =relays=.
+
 * Layout
 
 | module          | role                                                   |
@@ -108,6 +126,8 @@ later phase.
 | =netdetect.py=  | network facts and profile selection                    |
 | =peers.py=      | peer directory read/publish, link planning             |
 | =manager.py=    | link manager: keep wanted peers linked per policy      |
+| =keys.py=       | node ed25519 key, id, sign / verify                    |
+| =iroh_link.py=  | optional iroh transport (dial, serve, authorize)       |
 | =daemon.py=     | =run=: ingest loop, state updates, link supervisor     |
 | =cli.py=        | Click commands only                                    |
 
@@ -137,7 +157,7 @@ messnet config                       # print effective configuration
    shared by Syncthing) and network profiles (=etc/networks/*.toml=:
    detection rules → allowed links in preference order, max scope).
    Link manager selects links from these.  =messnet links= status.
-4. [ ] iroh link (optional extra =messnet[iroh]=): relay disabled or
+4. [X] iroh link (optional extra =messnet[iroh]=): relay disabled or
    self-hosted, static discovery from the peer directory, ALPN
    =messnet/1=; node key reused as iroh endpoint id.
 5. [ ] gonc link presets per network profile (direct / SOCKS5 relay;

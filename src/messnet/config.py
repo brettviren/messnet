@@ -30,6 +30,11 @@ class Config:
     state: Path = field(default_factory=lambda: _xdg("XDG_CACHE_HOME", ".cache") / "messnet" / "state")
     # Syncthing-shared directory holding peers/*.toml and networks/*.toml.
     etc: Path = field(default_factory=lambda: _xdg("XDG_DATA_HOME", ".local/share") / "messnet" / "etc")
+    # Node identity key (ed25519 seed); the public key is the node / iroh id.
+    key: Path = field(default_factory=lambda: _xdg("XDG_DATA_HOME", ".local/share") / "messnet" / "node.key")
+    # iroh transport: bind ("HOST:PORT"), relays (list of URLs; empty disables relaying),
+    # listen (accept iroh links), scope (widest scope of inbound iroh links).
+    iroh: dict = field(default_factory=dict)
     poll: float = 0.25
     listen: list = field(default_factory=list)
     links: list[dict] = field(default_factory=list)
@@ -46,8 +51,8 @@ class Config:
                 for f in fields(self)}
 
 
-_PATHS = {"spool", "local_spool", "db", "state", "etc"}
-_ENV_KEYS = ("node", "spool", "local_spool", "db", "state", "etc", "poll", "network")
+_PATHS = {"spool", "local_spool", "db", "state", "etc", "key"}
+_ENV_KEYS = ("node", "spool", "local_spool", "db", "state", "etc", "key", "poll", "network")
 
 
 def _coerce(key: str, value):
