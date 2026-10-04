@@ -28,23 +28,32 @@ class Config:
     local_spool: Path = field(default_factory=lambda: _xdg("XDG_STATE_HOME", ".local/state") / "messnet" / "spool")
     db: Path = field(default_factory=lambda: _xdg("XDG_DATA_HOME", ".local/share") / "messnet" / "messnet.db")
     state: Path = field(default_factory=lambda: _xdg("XDG_CACHE_HOME", ".cache") / "messnet" / "state")
+    # Syncthing-shared directory holding peers/*.toml and networks/*.toml.
+    etc: Path = field(default_factory=lambda: _xdg("XDG_DATA_HOME", ".local/share") / "messnet" / "etc")
     poll: float = 0.25
-    listen: list[str] = field(default_factory=list)
+    listen: list = field(default_factory=list)
     links: list[dict] = field(default_factory=list)
+    # Peers the link manager keeps linked: list of node names, or "*" for all known.
+    peers: list[str] | str = field(default_factory=list)
+    # Endpoints this node advertises in its peer file, by link kind.
+    advertise: dict = field(default_factory=dict)
+    # Force a network profile name instead of detecting one.
+    network: str | None = None
+    manage_interval: float = 30.0
 
     def as_dict(self) -> dict:
         return {f.name: (str(v) if isinstance(v := getattr(self, f.name), Path) else v)
                 for f in fields(self)}
 
 
-_PATHS = {"spool", "local_spool", "db", "state"}
-_ENV_KEYS = ("node", "spool", "local_spool", "db", "state", "poll")
+_PATHS = {"spool", "local_spool", "db", "state", "etc"}
+_ENV_KEYS = ("node", "spool", "local_spool", "db", "state", "etc", "poll", "network")
 
 
 def _coerce(key: str, value):
     if key in _PATHS:
         return Path(value).expanduser()
-    if key == "poll":
+    if key in ("poll", "manage_interval"):
         return float(value)
     return value
 

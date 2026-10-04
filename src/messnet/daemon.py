@@ -3,7 +3,7 @@
 import asyncio
 import logging
 
-from messnet import state
+from messnet import manager, peers, state
 from messnet.links import check_spec, keep_link, serve_tcp, stdio_streams
 from messnet.node import Node
 from messnet.replicate import Session
@@ -30,13 +30,23 @@ def listen_specs(listen: list) -> list[dict]:
     return [{"addr": x} if isinstance(x, str) else dict(x) for x in listen]
 
 
+def publish_self(node: Node) -> bool:
+    """Write this node's peer file from its ``advertise`` config. True if changed."""
+    if not node.cfg.advertise:
+        return False
+    return peers.publish_peer(node.cfg.etc, peers.peer_record(node.name, node.cfg.advertise))
+
+
 async def run(node: Node) -> None:
-    """Run maintenance, configured listeners and links until cancelled."""
+    """Run maintenance, listeners, explicit links and the link manager until cancelled."""
     specs = [check_spec(dict(s)) for s in node.cfg.links]
+    publish_self(node)
     servers = [await serve_tcp(node, ls["addr"], ls.get("scope", "all"))
                for ls in listen_specs(node.cfg.listen)]
     tasks = [asyncio.create_task(maintain(node))]
     tasks += [asyncio.create_task(keep_link(node, spec)) for spec in specs]
+    if node.cfg.peers:
+        tasks.append(asyncio.create_task(manager.manage(node)))
     try:
         await asyncio.gather(*tasks)
     finally:

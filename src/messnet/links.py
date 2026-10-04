@@ -29,6 +29,7 @@ from messnet.replicate import LINK_SCOPES, Session
 log = logging.getLogger(__name__)
 
 REMOTE_COMMAND = ["messnet", "link", "--stdio"]
+ENDPOINT_KINDS = ("tcp", "ssh", "cmd")
 
 
 def parse_addr(addr: str, default_host: str = "127.0.0.1") -> tuple[str, int]:
@@ -58,7 +59,12 @@ def link_argv(spec: dict) -> list[str] | None:
 
 
 def link_label(spec: dict) -> str:
-    return spec.get("name") or f"{spec.get('kind')}:{spec.get('target') or spec.get('addr') or spec.get('argv')}"
+    if spec.get("name"):
+        return spec["name"]
+    where = spec.get("target") or spec.get("addr") or spec.get("argv")
+    if isinstance(where, list):
+        where = shlex.join(where)
+    return f"{spec.get('kind')}:{where}"
 
 
 def check_spec(spec: dict) -> dict:
@@ -82,20 +88,25 @@ async def stdio_streams() -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
     return reader, writer
 
 
-async def run_link(node: Node, spec: dict) -> None:
+def make_session(node: Node, spec: dict, reader, writer) -> Session:
+    return Session(node, reader, writer, spec.get("scope", "all"),
+                   expect=spec.get("peer"), label=link_label(spec))
+
+
+async def run_link(node: Node, spec: dict, connect_timeout: float = 30.0) -> None:
     """Open the link described by SPEC and run one session over it."""
-    scope = spec.get("scope", "all")
     argv = link_argv(spec)
     if argv is None:
         host, port = parse_addr(spec["addr"])
-        reader, writer = await asyncio.open_connection(host, port, limit=2**24)
-        await Session(node, reader, writer, scope).run()
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(host, port, limit=2**24), connect_timeout)
+        await make_session(node, spec, reader, writer).run()
         return
     log.debug("spawning %s", shlex.join(argv))
     proc = await asyncio.create_subprocess_exec(*argv, stdin=asyncio.subprocess.PIPE,
                                                 stdout=asyncio.subprocess.PIPE, limit=2**24)
     try:
-        await Session(node, proc.stdout, proc.stdin, scope).run()
+        await make_session(node, spec, proc.stdout, proc.stdin).run()
     finally:
         if proc.returncode is None:
             with contextlib.suppress(ProcessLookupError):
@@ -122,15 +133,21 @@ async def keep_link(node: Node, spec: dict, max_backoff: float = 60.0) -> None:
 
 
 async def serve_tcp(node: Node, addr: str, scope: str = "all") -> asyncio.Server:
-    """Accept TCP links on ADDR; each connection runs a session."""
+    """Accept TCP links on ADDR; each connection runs a session.
+
+    The session scope is the narrower of SCOPE and the node's current
+    network profile scope (``node.profile_scope``), checked per connection.
+    """
+    host, port = parse_addr(addr)
+
     async def handle(reader, writer):
         peer = writer.get_extra_info("peername")
+        link_scope = "all" if "all" in (scope, node.profile_scope) else "lan"
         try:
-            await Session(node, reader, writer, scope).run()
+            await Session(node, reader, writer, link_scope, label=f"tcp-in:{host}:{port}").run()
         except Exception as err:
             log.warning("tcp link from %s failed: %s", peer, err)
 
-    host, port = parse_addr(addr)
     server = await asyncio.start_server(handle, host, port, limit=2**24)
     log.info("listening on %s:%d (%s scope)", host, port, scope)
     return server

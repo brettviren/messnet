@@ -3,17 +3,18 @@
 import asyncio
 import json
 import logging
+import signal
 import sys
 
 import click
 
-from messnet import daemon, state
+from messnet import daemon, manager, netdetect, peers, state
 from messnet.config import load_config
 from messnet.event import EventError, default_source, dumps, parse_assignments
 from messnet.filters import parse_since
-from messnet.links import check_spec, keep_link, run_link, serve_tcp
+from messnet.links import check_spec, keep_link, link_label, run_link, serve_tcp
 from messnet.node import Node
-from messnet.replicate import LINK_SCOPES
+from messnet.replicate import LINK_EVENT, LINK_SCOPES
 
 CONTEXT = {"help_option_names": ["-h", "--help"]}
 
@@ -25,10 +26,18 @@ def _node(ctx: click.Context) -> Node:
 
 
 def _run_async(coro) -> None:
-    try:
-        asyncio.run(coro)
-    except KeyboardInterrupt:
-        pass
+    """Run CORO; SIGTERM / SIGINT cancel it so sessions shut down cleanly."""
+    async def main():
+        task = asyncio.ensure_future(coro)
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            loop.add_signal_handler(sig, task.cancel)
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    asyncio.run(main())
 
 
 def _format_text(ev: dict) -> str:
@@ -48,9 +57,11 @@ def _echo_events(events, fmt: str) -> None:
 @click.option("--spool", type=click.Path(file_okay=False), help="Shared ('all' scope) spool directory.")
 @click.option("--db", type=click.Path(dir_okay=False), help="Local SQLite store.")
 @click.option("--state", type=click.Path(file_okay=False), help="Materialized state directory.")
+@click.option("--etc", type=click.Path(file_okay=False), help="Shared peers/networks directory.")
+@click.option("-n", "--network", help="Force a network profile instead of detecting one.")
 @click.option("-v", "--verbose", count=True, help="More logging to stderr (repeatable).")
 @click.pass_context
-def cli(ctx, config_path, node, spool, db, state, verbose):
+def cli(ctx, config_path, node, spool, db, state, etc, network, verbose):
     """Multi-host event notification network."""
     logging.basicConfig(stream=sys.stderr, format="messnet: %(levelname)s %(message)s",
                         level=[logging.WARNING, logging.INFO, logging.DEBUG][min(verbose, 2)])
@@ -58,7 +69,8 @@ def cli(ctx, config_path, node, spool, db, state, verbose):
         click.echo(ctx.get_help())
         ctx.exit()
     try:
-        ctx.obj = load_config(config_path, node=node, spool=spool, db=db, state=state)
+        ctx.obj = load_config(config_path, node=node, spool=spool, db=db, state=state,
+                              etc=etc, network=network)
     except (OSError, ValueError) as err:
         raise click.ClickException(str(err)) from err
 
@@ -261,3 +273,66 @@ def run(ctx):
         _run_async(daemon.run(_node(ctx)))
     except ValueError as err:
         raise click.ClickException(str(err)) from err
+
+
+@cli.command(context_settings=CONTEXT)
+@click.option("--facts", "show_facts", is_flag=True, help="Also print the gathered network facts.")
+@click.pass_context
+def net(ctx, show_facts):
+    """Show the detected network profile."""
+    facts = netdetect.gather_facts()
+    profile = netdetect.select_profile(peers.load_networks(ctx.obj.etc), facts, ctx.obj.network)
+    out = {"profile": profile, "facts": facts} if show_facts else profile
+    click.echo(json.dumps(out, indent=2))
+
+
+@cli.group("peers", context_settings=CONTEXT, no_args_is_help=True)
+def peers_grp():
+    """The shared peer directory (etc/peers/*.toml)."""
+
+
+@peers_grp.command("list", context_settings=CONTEXT)
+@click.pass_context
+def peers_list(ctx):
+    """List known peers and the link kinds they advertise."""
+    for name, rec in peers.load_peers(ctx.obj.etc).items():
+        kinds = ",".join(k for k, v in rec.items() if isinstance(v, list) and v and isinstance(v[0], dict))
+        click.echo(f"{name} {rec.get('updated', '-')} {kinds or '-'}")
+
+
+@peers_grp.command("publish", context_settings=CONTEXT)
+@click.pass_context
+def peers_publish(ctx):
+    """Write this node's peer file from the 'advertise' configuration."""
+    node = _node(ctx)
+    if not ctx.obj.advertise:
+        raise click.ClickException("nothing to publish: no 'advertise' in configuration")
+    click.echo("published" if daemon.publish_self(node) else "unchanged")
+
+
+@peers_grp.command("plan", context_settings=CONTEXT)
+@click.pass_context
+def peers_plan(ctx):
+    """Show which links the manager would try, per peer, on this network."""
+    profile, plan = manager.current_plan(_node(ctx), netdetect.gather_facts())
+    click.echo(f"network: {profile['name']} links={','.join(profile['links'])} scope={profile['scope']}")
+    for name, specs in plan.items():
+        click.echo(f"{name}:" + ("" if specs else " (no usable links)"))
+        for spec in specs:
+            click.echo(f"  {spec['scope']:3} {link_label(spec)}")
+
+
+@cli.command(context_settings=CONTEXT)
+@click.option("--format", "fmt", type=click.Choice(["json", "text"]), default="text", show_default=True)
+@click.pass_context
+def links(ctx, fmt):
+    """Show the last reported state of each peer link (from 'run'/'serve')."""
+    node = _node(ctx)
+    state.update(node.store, ctx.obj.state)
+    for ev in state.read(ctx.obj.state, [LINK_EVENT], ctx.obj.node):
+        if fmt == "json":
+            click.echo(dumps(ev))
+            continue
+        d = ev.get("data", {})
+        extra = f" error={d['error']}" if d.get("error") else ""
+        click.echo(f"{ev['subject']:20} {d.get('state', '?'):4} {ev['time']} {d.get('link', '')}{extra}")

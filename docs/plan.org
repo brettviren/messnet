@@ -72,6 +72,25 @@ Authentication is delegated to the link (ssh keys, tailnet ACL, iroh
 endpoint id, gonc PSK) in v1; a signed handshake for raw TCP comes in a
 later phase.
 
+* Links, peers and networks
+
+- Every session reports =messnet.link.v1= events (=scope=host=,
+  =subject= = peer, =data.state= = =up= / =down=); =messnet links=
+  shows the latest per peer.
+- =etc/peers/<node>.toml= is written by =messnet peers publish= (and
+  =run=) from the =advertise= config table; endpoints may be limited
+  to =networks= (profile names) or to dialers with =tailscale= up.
+- =etc/networks/<name>.toml= profiles: =detect= table (=hostname=,
+  =iface=, =gateway=, =gateway_mac=, =domain=, =ssid=, =ip_prefix=,
+  =tailscale=; all must match), =links= (allowed kinds in preference
+  order), =scope= (widest link scope), =priority=.  A =default.toml=
+  overrides the built-in default (=links = ["tcp","ssh","cmd"]=,
+  =scope = "all"=).
+- The manager (in =run= when =peers= is set) re-plans every
+  =manage_interval= seconds, restarts a peer's link task when its plan
+  changes, does not dial a peer that is already linked, and narrows
+  inbound listener scope to the current profile scope.
+
 * Layout
 
 | module          | role                                                   |
@@ -86,6 +105,9 @@ later phase.
 | =filters.py=    | type glob and time ("1d", ISO) filters                 |
 | =replicate.py=  | protocol session over asyncio streams                  |
 | =links.py=      | stdio / tcp / subprocess(ssh, gonc, …) links, backoff  |
+| =netdetect.py=  | network facts and profile selection                    |
+| =peers.py=      | peer directory read/publish, link planning             |
+| =manager.py=    | link manager: keep wanted peers linked per policy      |
 | =daemon.py=     | =run=: ingest loop, state updates, link supervisor     |
 | =cli.py=        | Click commands only                                    |
 
@@ -111,7 +133,7 @@ messnet config                       # print effective configuration
 1. [X] Spool, store, envelope; =emit=, =tail=, =ingest=, =state=, =vv=, =config=.
 2. [X] Replicator + stdio / tcp / subprocess links; =link=, =serve=,
    =connect=, =run= with configured links and reconnect backoff.
-3. [ ] Peer directory (=etc/peers/<node>.toml= written by each node,
+3. [X] Peer directory (=etc/peers/<node>.toml= written by each node,
    shared by Syncthing) and network profiles (=etc/networks/*.toml=:
    detection rules → allowed links in preference order, max scope).
    Link manager selects links from these.  =messnet links= status.

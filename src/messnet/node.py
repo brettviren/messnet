@@ -24,6 +24,11 @@ class Node:
                        "lan": Spool(cfg.local_spool / "lan"),
                        "host": Spool(cfg.local_spool / "host")}
         self.store = Store(cfg.db)
+        self.sessions: dict[str, int] = {}   # peer name -> number of live sessions
+        self.profile_scope = "lan"            # widest link scope allowed; set by the link manager
+
+    def linked(self, peer: str) -> bool:
+        return self.sessions.get(peer, 0) > 0
 
     def close(self) -> None:
         self.store.close()

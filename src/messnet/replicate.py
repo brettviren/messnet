@@ -23,6 +23,7 @@ log = logging.getLogger(__name__)
 
 PROTO = 1
 LINK_SCOPES = ("lan", "all")
+LINK_EVENT = "messnet.link.v1"
 
 
 class ProtocolError(Exception):
@@ -38,11 +39,13 @@ class Session:
     """One replication session with a peer over a (reader, writer) stream pair."""
 
     def __init__(self, node: Node, reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
-                 link_scope: str = "all", keepalive: float = 30.0, timeout: float = 90.0):
+                 link_scope: str = "all", keepalive: float = 30.0, timeout: float = 90.0,
+                 expect: str | None = None, label: str = "", report: bool = True):
         if link_scope not in LINK_SCOPES:
             raise ValueError(f"link scope must be one of {LINK_SCOPES}: {link_scope!r}")
         self.node, self.reader, self.writer = node, reader, writer
         self.link_scope, self.keepalive, self.timeout = link_scope, keepalive, timeout
+        self.expect, self.label, self.report = expect, label, report
         self.peer: str | None = None
         self.peer_vv: dict[str, int] = {}
         self.seen: set[tuple[str, int]] = set()   # (stream, seq) the peer has via this session
@@ -78,6 +81,10 @@ class Session:
         if msg["op"] != "hello" or msg.get("proto") != PROTO:
             raise ProtocolError(f"expected hello proto {PROTO}, got {msg}")
         self.peer = str(msg["node"])
+        if self.expect and self.peer != self.expect:
+            raise ProtocolError(f"expected peer {self.expect}, reached {self.peer}")
+        if self.peer == self.node.name:
+            raise ProtocolError("linked to self")
         self.peer_vv = {str(k): int(v) for k, v in msg.get("vv", {}).items()}
         log.info("linked with %s (%s scope)", self.peer, self.link_scope)
 
@@ -130,10 +137,28 @@ class Session:
             await asyncio.sleep(self.keepalive)
             await self._send({"op": "ping"})
 
+    def _status(self, state: str, error: str | None = None) -> None:
+        if not self.report or not self.peer:
+            return
+        data = {"state": state, "link": self.label, "scope": self.link_scope}
+        if state == "down":
+            data.update(sent=self.sent, received=self.received)
+        if error:
+            data["error"] = error
+        try:
+            self.node.emit(LINK_EVENT, data, subject=self.peer, scope="host",
+                           source=f"messnet://{self.node.name}/link")
+        except Exception as err:      # status reporting must never break a link
+            log.debug("link status event failed: %s", err)
+
     async def run(self) -> None:
         """Run until the link fails or the peer leaves; always closes the writer."""
+        registered, error = False, None
         try:
             await self._handshake()
+            self.node.sessions[self.peer] = self.node.sessions.get(self.peer, 0) + 1
+            registered = True
+            self._status("up")
             tasks = [asyncio.create_task(c()) for c in (self._sender, self._receiver, self._pinger)]
             try:
                 done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
@@ -145,7 +170,13 @@ class Session:
                 err = task.exception()
                 if err and not isinstance(err, EOFError):
                     raise err
+        except Exception as err:
+            error = str(err) or type(err).__name__
+            raise
         finally:
+            if registered:
+                self.node.sessions[self.peer] -= 1
+                self._status("down", error)
             log.info("unlinked from %s: sent %d, received %d new",
                      self.peer, self.sent, self.received)
             with contextlib.suppress(Exception):

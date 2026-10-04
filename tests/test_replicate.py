@@ -4,6 +4,7 @@ import sys
 import pytest
 
 from messnet.links import keep_link, run_link, serve_tcp
+from messnet.replicate import LINK_EVENT, ProtocolError
 
 
 async def until(cond, timeout=5.0):
@@ -14,7 +15,8 @@ async def until(cond, timeout=5.0):
 
 
 def types_at(node):
-    return sorted(ev["type"] for _, ev in node.store.query())
+    """Event types at NODE, excluding the node's own link status events."""
+    return sorted(ev["type"] for _, ev in node.store.query() if ev["type"] != LINK_EVENT)
 
 
 async def linked(a, b, scope, body):
@@ -102,3 +104,35 @@ def test_cmd_link_over_subprocess_stdio(make_node, tmp_path):
     asyncio.run(main())
     b2 = make_node("b")
     assert types_at(b2) == ["from.a", "from.b"]
+
+
+def link_states(node):
+    return [(ev["subject"], ev["data"]["state"])
+            for _, ev in node.store.query([LINK_EVENT])]
+
+
+def test_link_status_events_and_registry(make_node):
+    a, b = make_node("a"), make_node("b")
+
+    async def body():
+        await until(lambda: a.linked("b") and b.linked("a"))
+
+    asyncio.run(linked(a, b, "all", body))
+    assert link_states(b) == [("a", "up"), ("a", "down")]
+    assert not b.linked("a")
+    assert all(ev["scope"] == "host" for _, ev in b.store.query([LINK_EVENT]))
+
+
+def test_expected_peer_mismatch(make_node):
+    a, b = make_node("a"), make_node("b")
+
+    async def main():
+        server = await serve_tcp(a, "127.0.0.1:0")
+        port = server.sockets[0].getsockname()[1]
+        try:
+            with pytest.raises(ProtocolError):
+                await run_link(b, {"kind": "tcp", "addr": f"127.0.0.1:{port}", "peer": "c"})
+        finally:
+            server.close()
+
+    asyncio.run(main())
