@@ -9,7 +9,7 @@ import sys
 
 import click
 
-from messnet import daemon, install, lock, manager, netdetect, peers, state
+from messnet import daemon, install, lock, logsetup, manager, netdetect, peers, state
 from messnet.cli_config import config_grp
 from messnet.config import config_file, load_config
 from messnet.event import EventError, default_source, dumps, parse_assignments
@@ -215,6 +215,7 @@ def _run_exclusive(ctx: click.Context, main) -> None:
             if sys.stderr.isatty():
                 click.echo("messnet: a node service is already running for this store; nothing to do", err=True)
             return
+        logsetup.configure(ctx.obj.log, ctx.obj.log_level)
         try:
             _run_async(main(_node(ctx)))
         except ValueError as err:
@@ -533,6 +534,8 @@ def install_cmd(ctx, target, list_, interval, exe):
                 click.echo(line)
         if not found:
             click.echo("messnet: nothing installed", err=True)
+        if ctx.obj.log.exists() and ctx.obj.log_level != "off":
+            click.echo(f"log: {ctx.obj.log} ({ctx.obj.log_level})")
         return
     try:
         service = install.Service(install.resolve_exe(exe), install.global_args(**ctx.meta["global_opts"]))

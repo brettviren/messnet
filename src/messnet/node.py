@@ -30,6 +30,8 @@ class Node:
         self.store = Store(cfg.db)
         self.schemas = Schemas(cfg.etc)
         self.sessions: dict[str, int] = {}   # peer name -> number of live sessions
+        self.live: set = set()                # the Session objects behind them
+        self.replan = asyncio.Event()         # set to make the link manager re-plan now
         self.profile_scope = "lan"            # widest link scope allowed; set by the link manager
         self.iroh = None                      # iroh transport, opened on first use
         self.iroh_lock = asyncio.Lock()

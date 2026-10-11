@@ -155,6 +155,8 @@ again, so pruned events are not re-replicated.
 | =gonc.py=       | gonc dial / responder commands, policy classes         |
 | =daemon.py=     | =run=: ingest loop, state updates, link supervisor     |
 | =lock.py=       | one node service per store (=flock=), for serve / run  |
+| =service.py=    | the service: components reconciled with config / peers |
+| =logsetup.py=   | rotating service log file                              |
 | =install.py=    | install / list / remove cron and systemd entries       |
 | =cli.py=        | Click commands only                                    |
 

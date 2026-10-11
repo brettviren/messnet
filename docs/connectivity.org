@@ -360,13 +360,18 @@ messnet install systemd      # a user service, started at boot (needs lingering)
 messnet install cron         # or/and: crontab entries, which also work at boot
 messnet install --list       # what is installed, and whether it is running
 #+end_example
-Run it as many times as you like; it only does what is missing.  Both
+Run it as many times as you like; it only does what is missing.  The running
+service follows the configuration: after =messnet config add …=, =config
+remove …= or a hand edit of =config.toml= it starts or stops the listeners and
+links within a few seconds, with no restart (bad or half-saved files are
+ignored with a warning).  It logs to =~/.cache/messnet/serve.log=.  Both
 entries run =messnet serve=, which is the whole node (listeners, links,
 peers, spool and state upkeep) and starts only one copy per store, so having
 both installed is fine.  Pass global options first, e.g. =messnet -c
 ~/mynet.toml install systemd=.  Undo with =messnet uninstall systemd= /
 =cron=; uninstalling what is not installed does nothing.  See [[file:design.org]]
-for how it works.  Logs under systemd: =journalctl --user -u messnet -f=.
+for how it works and what can and cannot change live.  Logs: =tail -f
+~/.cache/messnet/serve.log=; under systemd also =journalctl --user -u messnet -f=.
 
 * Troubleshooting
 

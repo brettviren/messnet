@@ -42,6 +42,12 @@ class Config:
     gonc_serve: list[dict] = field(default_factory=list)
     # Path of the loaded config file, if any (not a config key).
     path: Path | None = field(default=None, repr=False)
+    # (path argument, overrides) this was loaded with, so a running service can reload the
+    # file the same way (not a config key).
+    load_args: tuple | None = field(default=None, repr=False)
+    # `serve` / `run` log here (rotating) at log_level: off, error, warning, info or debug.
+    log: Path = field(default_factory=lambda: _xdg("XDG_CACHE_HOME", ".cache") / "messnet" / "serve.log")
+    log_level: str = "info"
     # Require the signed handshake on TCP links (in and out).
     tcp_auth: bool = True
     poll: float = 0.25
@@ -57,11 +63,12 @@ class Config:
 
     def as_dict(self) -> dict:
         return {f.name: (str(v) if isinstance(v := getattr(self, f.name), Path) else v)
-                for f in fields(self) if f.name != "path"}
+                for f in fields(self) if f.name not in ("path", "load_args")}
 
 
-_PATHS = {"spool", "local_spool", "db", "state", "etc", "key", "secrets"}
-_ENV_KEYS = ("node", "spool", "local_spool", "db", "state", "etc", "key", "poll", "network")
+_PATHS = {"spool", "local_spool", "db", "state", "etc", "key", "secrets", "log"}
+_ENV_KEYS = ("node", "spool", "local_spool", "db", "state", "etc", "key", "poll", "network", "log", "log_level")
+LOG_LEVELS = ("off", "error", "warning", "info", "debug")
 
 
 def _coerce(key: str, value):
@@ -69,6 +76,10 @@ def _coerce(key: str, value):
         return Path(value).expanduser()
     if key in ("poll", "manage_interval"):
         return float(value)
+    if key == "log_level":
+        if str(value).lower() not in LOG_LEVELS:
+            raise ValueError(f"log_level must be one of {LOG_LEVELS}: {value!r}")
+        return str(value).lower()
     return value
 
 
@@ -108,4 +119,51 @@ def load_config(path: str | Path | None = None, must_exist: bool = True, **overr
     elif explicit and must_exist:
         raise FileNotFoundError(f"config file not found: {cpath}")
     _apply(cfg, overrides)
+    cfg.load_args = (path, dict(overrides))
     return cfg
+
+
+# --- reloading a running service's configuration ---------------------------------------------
+
+# Settings a running service picks up when the file changes.  The others (node name and the
+# directories and files of the store) are opened once; changing them takes a restart.
+RELOADABLE = ("listen", "links", "peers", "advertise", "gonc_serve", "gonc_bin", "secrets", "tcp_auth",
+              "poll", "manage_interval", "network", "iroh", "log", "log_level")
+# Of iroh's settings, these are fixed once the endpoint is open.
+IROH_FIXED = ("bind", "relays")
+
+
+def source_file(cfg: Config) -> Path:
+    """The config file CFG was (or would be) loaded from."""
+    return config_file(cfg.load_args[0] if cfg.load_args else None)
+
+
+def reload_config(cfg: Config) -> Config:
+    """Load the config file again the way CFG was loaded (same overrides)."""
+    path, overrides = cfg.load_args
+    return load_config(path, must_exist=True, **overrides)
+
+
+def merge_reloadable(cfg: Config, new: Config) -> tuple[list[str], list[str]]:
+    """Copy NEW's reloadable settings into CFG in place.
+
+    Return (changed settings, settings that differ but need a restart and were left alone).
+    """
+    changed, ignored = [], []
+    for key in RELOADABLE:
+        old, value = getattr(cfg, key), getattr(new, key)
+        if key == "iroh":
+            value = dict(value)
+            for fixed in IROH_FIXED:
+                if old.get(fixed) != value.get(fixed):
+                    ignored.append(f"iroh.{fixed}")
+                    value.pop(fixed, None)
+                    if fixed in old:
+                        value[fixed] = old[fixed]
+        if value != old:
+            changed.append(key)
+            setattr(cfg, key, value)
+    for f in fields(Config):
+        if f.name not in RELOADABLE and f.name not in ("path", "load_args") and getattr(cfg, f.name) != getattr(new, f.name):
+            ignored.append(f.name)
+    return changed, ignored

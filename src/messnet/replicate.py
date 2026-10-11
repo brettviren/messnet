@@ -18,6 +18,7 @@ import contextlib
 import json
 import logging
 import os
+from collections.abc import Callable
 
 from messnet import keys
 from messnet.event import EventError, validate
@@ -62,6 +63,15 @@ class Session:
         # contiguous seqs are folded into peer_vv as they are sent or received.
         self.seen: set[tuple[str, int]] = set()
         self.sent = self.received = 0
+        # For links authorised by the peer directory: returns False once that no longer holds.
+        self.recheck: Callable[[], bool] | None = None
+        self._revoked = asyncio.Event()
+        self._revoke_reason = ""
+
+    def revoke(self, reason: str) -> None:
+        """End the session: its authorisation is gone."""
+        self._revoke_reason = reason
+        self._revoked.set()
 
     def _peer_has(self, ev: dict) -> bool:
         key = stream_key(ev["origin"], ev["scope"])
@@ -136,6 +146,8 @@ class Session:
             raise ProtocolError(f"authentication failed: {self.peer} has no id in the peer directory")
         if claimed != trusted or not keys.verify(trusted, message, sig):
             raise ProtocolError(f"authentication failed for {self.peer}")
+        etc, peer = self.node.cfg.etc, self.peer
+        self.recheck = lambda: load_peers(etc).get(peer, {}).get("id") == trusted
 
     async def _push(self, ev: dict) -> None:
         if allowed(ev["scope"], self.link_scope) and not self._peer_has(ev):
@@ -183,6 +195,10 @@ class Session:
         self._mark(ev)
         self.received += self.node.receive(ev)
 
+    async def _revocation(self) -> None:
+        await self._revoked.wait()
+        raise ProtocolError(f"link revoked: {self._revoke_reason}")
+
     async def _pinger(self) -> None:
         while True:
             await asyncio.sleep(self.keepalive)
@@ -208,9 +224,11 @@ class Session:
         try:
             await self._handshake()
             self.node.sessions[self.peer] = self.node.sessions.get(self.peer, 0) + 1
+            self.node.live.add(self)
             registered = True
             self._status("up")
-            tasks = [asyncio.create_task(c()) for c in (self._sender, self._receiver, self._pinger)]
+            tasks = [asyncio.create_task(c()) for c in (self._sender, self._receiver, self._pinger,
+                                                        self._revocation)]
             try:
                 done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             finally:
@@ -226,6 +244,7 @@ class Session:
             raise
         finally:
             if registered:
+                self.node.live.discard(self)
                 self.node.sessions[self.peer] -= 1
                 self._status("down", error)
             if self.peer:

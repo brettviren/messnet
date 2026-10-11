@@ -157,16 +157,22 @@ async def serve_tcp(node: Node, addr: str, scope: str = "all") -> asyncio.Server
     network profile scope (``node.profile_scope``), checked per connection.
     """
     host, port = parse_addr(addr)
+    sessions: set[asyncio.Task] = set()
 
     async def handle(reader, writer):
         peer = writer.get_extra_info("peername")
         link_scope = "all" if "all" in (scope, node.profile_scope) else "lan"
+        task = asyncio.current_task()
+        sessions.add(task)
         try:
             await Session(node, reader, writer, link_scope, label=f"tcp-in:{host}:{port}",
                           auth=node.cfg.tcp_auth).run()
         except Exception as err:
             log.warning("tcp link from %s failed: %s", peer, err)
+        finally:
+            sessions.discard(task)
 
     server = await asyncio.start_server(handle, host, port, limit=2**24)
+    server.sessions = sessions        # lets whoever closes the listener end its sessions too
     log.info("listening on %s:%d (%s scope)", host, port, scope)
     return server

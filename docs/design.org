@@ -250,6 +250,95 @@ Each step checks what is already in place and does only what is missing, so
   under cron it is =~/.local/bin:/usr/local/bin:/usr/bin:/bin=.  Setting
   =gonc_bin= to an absolute path avoids the question.
 
+** Logging
+
+=serve= and =run= log to a rotating file, =~/.cache/messnet/serve.log=
+(1 MiB, three old copies), at =info= level: start and stop, listeners
+and links coming and going, peers linked and unlinked, configuration
+reloads and why one was refused.  Under cron nobody reads stderr, so this
+is where to look.  The same warnings still go to stderr.  A duplicate start
+that finds the lock held writes nothing, so cron's periodic check does not
+fill the log.
+
+#+begin_example
+messnet config set log_level debug     # off | error | warning | info | debug; live
+messnet config set log /path/serve.log # where; live
+messnet install --list                 # shows the path while the file exists
+#+end_example
+
+* Following configuration changes
+
+A running =serve= follows the configuration; nothing needs restarting for
+the usual changes.  Edit =config.toml= by hand, or use =messnet config
+set|add|remove=, and within a few seconds the service starts the listeners
+and links that are new, stops those that are gone, and leaves the rest and
+their connections untouched.  =messnet config add tcp ADDR= on a running
+node makes it listen and publishes the new endpoint in its peer file;
+=messnet config remove= makes it stop.
+
+** What is followed
+
+| change | effect, without a restart |
+|-|-|
+| =listen= entry added / removed | listener opened / closed, and the sessions it accepted are ended |
+| =[[links]]= entry added / removed | that link started / ended |
+| =[[gonc_serve]]= entry added / removed | responder started / stopped |
+| =peers= set, changed or emptied | link manager started, re-plans at once, or stopped (its links dropped) |
+| =advertise= | peer file rewritten (which Syncthing carries to the others) |
+| =iroh.listen= (or advertising iroh) | iroh listener started / stopped |
+| =tcp_auth=, =network=, =manage_interval=, =poll=, =gonc_bin=, =secrets=, =iroh.allow= / =iroh.scope= | used from the next connection or pass |
+| =log=, =log_level= | log file moved / level changed |
+| a file in =etc/peers= or =etc/networks= | the link manager re-plans at once (it also does every =manage_interval=) |
+| a peer removed from =etc/peers=, or its =id= changed | its authenticated TCP / iroh session is ended |
+
+*Not followed*: =node=, =spool=, =local_spool=, =db=, =state=, =etc=, =key=
+and iroh's =bind= / =relays=.  They are opened once and the rest of the
+service depends on them.  Changing one is logged as needing a restart and the
+running value is kept, so the service stays consistent; the rest of the same
+edit is still applied.  Environment variables and command line options given
+to =serve= are as at startup and still win over the file.
+
+** How it stays safe
+
+An editor, a script or Syncthing can leave a file half written, briefly
+missing or wrong, and the service must not turn that into dropped
+connections.  So:
+
+- *Settle first.* A changed file is applied only when the same content is seen
+  on two looks in a row (2 s apart).  =kill -HUP= applies at once.
+- *All or nothing.* The new file is parsed and every link, listener and
+  responder in it is validated before anything changes.  A file that does not
+  parse, or contains a bad entry, is rejected whole, said once in the log, and
+  the running configuration stays; the next valid save is picked up.
+- *A missing file is ignored* (it is not the same as an empty one, which
+  would mean "stop everything").
+- *Do not cut a working link for an unrelated change.* When the manager's
+  plan changes, a link in use stays unless its own endpoint left the plan; new
+  endpoints are used the next time that peer must be dialed.  A plan change is
+  acted on only after it comes out the same twice, so a peer file seen
+  half-written, or a flapping network, does not tear links down.  (Narrowing
+  the scope of inbound links on a less trusted network is never delayed.)
+- *Revocation needs two looks too.* A session is ended for lack of
+  authorisation only if the peer directory fails to authorise it on two
+  checks in a row.  Links that are authenticated outside the directory (ssh,
+  gonc, cmd) are not affected by it.
+- *Failures are local.* A listener whose port is busy is retried with backoff
+  (up to five minutes) while everything else runs; a component that crashes is
+  logged with its traceback and restarted.  Neither stops the service.
+
+** Limits
+
+- Established sessions keep the settings they started with; =tcp_auth=,
+  scope and the like apply to new connections.  (Removing a listener or link,
+  or a peer's authorisation, does end sessions.)
+- A peer-side change is seen on this node by the same polling: a peer's file
+  arriving by Syncthing makes a node that has =peers= set dial it within a few
+  seconds.  A node without =peers= (or without a running =serve=) does not
+  dial; the inbound side still reads the directory at each connection.
+- Polling, every 2 seconds, reads the config file and lists two small
+  directories; it does not need inotify, so it works the same on any
+  filesystem, including a Syncthing folder.
+
 * Security
 
 ** Trust model in one paragraph

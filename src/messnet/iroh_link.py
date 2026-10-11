@@ -146,8 +146,10 @@ class IrohTransport:
         reader, writer = stream_pair(conn, await conn.accept_bi())
         scope = self.node.cfg.iroh.get("scope", "all")
         link_scope = "all" if "all" in (scope, self.node.profile_scope) else "lan"
-        await Session(self.node, reader, writer, link_scope, expect=name or None,
-                      label=f"iroh-in:{remote[:10]}").run()
+        session = Session(self.node, reader, writer, link_scope, expect=name or None,
+                          label=f"iroh-in:{remote[:10]}")
+        session.recheck = lambda: self._authorize(remote) is not None
+        await session.run()
 
     async def serve(self) -> None:
         """Accept iroh links until cancelled or the endpoint closes."""

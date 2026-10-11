@@ -19,13 +19,14 @@ from pathlib import Path
 import tomlkit
 from tomlkit.items import AoT, Array
 
+from messnet.config import LOG_LEVELS
 from messnet.links import ENDPOINT_KINDS, check_spec
 
 # Settable scalar keys and their value types.
 SCALARS = {
     "node": str, "etc": "dir", "spool": "dir", "local_spool": "dir", "db": str, "state": "dir",
     "key": str, "secrets": "dir", "gonc_bin": str, "network": str, "poll": float,
-    "manage_interval": float, "tcp_auth": bool, "peers": "peers",
+    "manage_interval": float, "tcp_auth": bool, "peers": "peers", "log": str, "log_level": str,
 }
 
 # Fields that only configure the serving side; never published.
@@ -59,6 +60,10 @@ def parse_scalar(key: str, text: str):
         return text.lower() in ("true", "yes", "1")
     if kind is float:
         return float(text)
+    if key == "log_level":
+        if text.lower() not in LOG_LEVELS:
+            raise ConfigEditError(f"log_level must be one of {', '.join(LOG_LEVELS)}")
+        return text.lower()
     if kind == "peers":
         return "*" if text.strip() == "*" else [p.strip() for p in text.split(",") if p.strip()]
     return text

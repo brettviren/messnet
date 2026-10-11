@@ -40,7 +40,8 @@ uv run messnet state get 'backup.*'
 - keeping it running :: =messnet install cron|systemd= makes sure
   =messnet serve= runs from boot and after crashes (safe to repeat;
   =messnet uninstall= undoes it).  Received events go to the store;
-  =serve= keeps the state files fresh.
+  =serve= keeps the state files fresh, logs to =~/.cache/messnet/serve.log=,
+  and follows changes to =config.toml= and =etc/peers= without a restart.
 - state :: newest event per =(type, origin, subject)= as
   =<state>/<type>/<origin>/<subject>.json= — read these from prompts
   and panels; they work offline and need no messnet process.
