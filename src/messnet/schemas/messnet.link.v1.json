@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "messnet:schema/messnet.link.v1",
+  "title": "messnet.link.v1",
+  "description": "A replication session with a peer came up or went down.  Subject: the peer's node name.",
+  "type": "object",
+  "required": ["state"],
+  "properties": {
+    "state":    {"enum": ["up", "down"]},
+    "link":     {"type": "string"},
+    "scope":    {"type": "string"},
+    "sent":     {"type": "integer", "minimum": 0},
+    "received": {"type": "integer", "minimum": 0},
+    "error":    {"type": "string"}
+  },
+  "additionalProperties": true,
+  "x-messnet": {"subject": "required", "scope": "host", "semantics": "snapshot"}
+}

@@ -16,6 +16,7 @@ from messnet.filters import parse_since
 from messnet.links import check_spec, keep_link, link_label, run_link, serve_tcp
 from messnet.node import Node
 from messnet.replicate import LINK_EVENT, LINK_SCOPES
+from messnet.schema import SchemaError, check_file
 
 CONTEXT = {"help_option_names": ["-h", "--help"]}
 
@@ -89,8 +90,10 @@ def cli(ctx, config_path, node, spool, db, state, etc, network, verbose):
 @click.option("--stdin", "from_stdin", is_flag=True,
               help="Read JSON lines, each a partial event with at least \"type\".")
 @click.option("-p", "--print", "echo", is_flag=True, help="Print the emitted event(s).")
+@click.option("--validate/--no-validate", default=True, show_default=True,
+              help="Check data against the type's schema, if it has one.")
 @click.pass_context
-def emit(ctx, type, assignments, subject, scope, producer, source, data_json, from_stdin, echo):
+def emit(ctx, type, assignments, subject, scope, producer, source, data_json, from_stdin, echo, validate):
     """Emit an event of TYPE with data from key=value / key:=json ASSIGNMENTS.
 
     \b
@@ -101,14 +104,14 @@ def emit(ctx, type, assignments, subject, scope, producer, source, data_json, fr
     node = _node(ctx)
     try:
         if from_stdin:
-            events = [node.emit_object(json.loads(line)) for line in sys.stdin if line.strip()]
+            events = [node.emit_object(json.loads(line), validate) for line in sys.stdin if line.strip()]
         else:
             if not type:
                 raise click.UsageError("TYPE is required unless --stdin is given")
             data = parse_assignments(list(assignments)) or None
             if data_json is not None:
                 data = json.loads(sys.stdin.read() if data_json == "-" else data_json)
-            events = [node.emit(type, data, subject=subject, scope=scope,
+            events = [node.emit(type, data, subject=subject, scope=scope, validate=validate,
                                 source=source or default_source(producer))]
     except (EventError, json.JSONDecodeError) as err:
         raise click.ClickException(str(err)) from err
@@ -404,6 +407,69 @@ def rebuild(ctx, yes):
     if not yes:
         raise click.UsageError("rebuild moves the store aside; pass --yes to confirm")
     click.echo(f"rebuilt store with {_node(ctx).rebuild()} events")
+
+
+@cli.group("schema", context_settings=CONTEXT, no_args_is_help=True)
+def schema_grp():
+    """Payload schemas of event types (etc/schemas/<type>.json and built-ins)."""
+
+
+@schema_grp.command("list", context_settings=CONTEXT)
+@click.pass_context
+def schema_list(ctx):
+    """List the types that have a schema and where each comes from."""
+    for type, source in _node(ctx).schemas.types().items():
+        click.echo(f"{type} {source}")
+
+
+@schema_grp.command("show", context_settings=CONTEXT, no_args_is_help=True)
+@click.argument("type")
+@click.pass_context
+def schema_show(ctx, type):
+    """Print the schema of event TYPE."""
+    try:
+        schema = _node(ctx).schemas.load(type)
+    except SchemaError as err:
+        raise click.ClickException(str(err)) from err
+    if schema is None:
+        raise click.ClickException(f"no schema for {type!r}")
+    click.echo(json.dumps(schema, indent=2, ensure_ascii=False))
+
+
+@schema_grp.command("check", context_settings=CONTEXT, no_args_is_help=True)
+@click.argument("files", nargs=-1, type=click.Path(dir_okay=False))
+def schema_check(files):
+    """Lint schema FILES: valid JSON Schema, file name is the type, description present."""
+    bad = 0
+    for file in files:
+        problems = check_file(file)
+        bad += bool(problems)
+        for problem in problems:
+            click.echo(f"{file}: {problem}")
+    if bad:
+        raise click.ClickException(f"{bad} of {len(files)} schema files have problems")
+
+
+@cli.command(context_settings=CONTEXT)
+@click.option("-t", "--type", "types", multiple=True, help="Type glob, e.g. 'backup.*' (repeatable).")
+@click.option("-o", "--origin", help="Only events from this origin node.")
+@click.option("--since", help="Only events newer than an age (30m, 2h, 1d) or ISO time.")
+@click.pass_context
+def validate(ctx, types, origin, since):
+    """Check stored events against their type's schema; exit 1 if any do not conform."""
+    node = _node(ctx)
+    try:
+        since_ts = parse_since(since)
+        results = list(node.schemas.audit(ev for _, ev in node.follow(list(types), origin, since_ts)))
+    except ValueError as err:       # bad --since or a broken schema file
+        raise click.ClickException(str(err)) from err
+    bad = 0
+    for ev, problems in results:
+        if problems:
+            bad += 1
+            click.echo(f"{ev['origin']}/{ev.get('scope', 'all')}/{ev['seq']} {ev['type']}: " + "; ".join(problems))
+    click.echo(f"{len(results)} events checked, {bad} invalid", err=True)
+    ctx.exit(1 if bad else 0)
 
 
 cli.add_command(config_grp)

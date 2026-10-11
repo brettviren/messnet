@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "messnet:schema/backup.run.v1",
+  "title": "backup.run.v1",
+  "description": "A step of the backup script finished.  Subject: the step name.",
+  "type": "object",
+  "required": ["result"],
+  "properties": {
+    "result": {"enum": ["ok", "fail"]},
+    "phase":  {"type": "string"},
+    "n":      {"type": "integer", "minimum": 0},
+    "error":  {"type": "string"}
+  },
+  "additionalProperties": true,
+  "x-messnet": {"subject": "required", "scope": "all", "semantics": "snapshot"}
+}

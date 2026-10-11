@@ -9,7 +9,7 @@ def run(tmp_path, *args, input=None, codes=(0,)):
     env = {"MESSNET_NODE": "t", "MESSNET_SPOOL": str(tmp_path / "spool"),
            "MESSNET_LOCAL_SPOOL": str(tmp_path / "local"), "MESSNET_DB": str(tmp_path / "db"),
            "MESSNET_STATE": str(tmp_path / "state"), "MESSNET_CONFIG": "",
-           "XDG_CONFIG_HOME": str(tmp_path / "cfg")}
+           "MESSNET_ETC": str(tmp_path / "etc"), "XDG_CONFIG_HOME": str(tmp_path / "cfg")}
     res = CliRunner().invoke(cli, list(args), env=env, input=input, catch_exceptions=False)
     assert res.exit_code in codes, res.output
     return res.output

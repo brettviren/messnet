@@ -123,6 +123,9 @@ def test_link_status_events_and_registry(make_node):
     assert link_states(b) == [("a", "up"), ("a", "down")]
     assert not b.linked("a")
     assert all(ev["scope"] == "host" for _, ev in b.store.query([LINK_EVENT]))
+    # What a real session reports satisfies the built-in schema.
+    checked = list(b.schemas.audit(ev for _, ev in b.store.query([LINK_EVENT])))
+    assert len(checked) == 2 and all(problems == [] for _, problems in checked)
 
 
 def test_expected_peer_mismatch(make_node):

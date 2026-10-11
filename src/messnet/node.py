@@ -9,6 +9,7 @@ from pathlib import Path
 from messnet import keys
 from messnet.config import Config
 from messnet.event import EventError, make_event
+from messnet.schema import Schemas
 from messnet.spool import Spool, read_from
 from messnet.store import Store
 
@@ -27,6 +28,7 @@ class Node:
                        "lan": Spool(cfg.local_spool / "lan"),
                        "host": Spool(cfg.local_spool / "host")}
         self.store = Store(cfg.db)
+        self.schemas = Schemas(cfg.etc)
         self.sessions: dict[str, int] = {}   # peer name -> number of live sessions
         self.profile_scope = "lan"            # widest link scope allowed; set by the link manager
         self.iroh = None                      # iroh transport, opened on first use
@@ -38,24 +40,29 @@ class Node:
     def close(self) -> None:
         self.store.close()
 
-    def emit(self, type: str, data=None, scope: str = "all", **attrs) -> dict:
-        """Create a new event originating at this node, spool and store it."""
+    def emit(self, type: str, data=None, scope: str = "all", validate: bool = False, **attrs) -> dict:
+        """Create a new event originating at this node, spool and store it.
+
+        With VALIDATE the event must conform to its type's schema (if it has one).
+        """
         if scope not in self.spools:
             raise EventError(f"scope must be one of {tuple(self.spools)}: {scope!r}")
         spool = self.spools[scope]
         with self.store.transaction():
             seq = max(self.store.max_seq(self.name, scope), spool.last_seq(self.name)) + 1
             ev = make_event(type, data, origin=self.name, seq=seq, scope=scope, **attrs)
+            if validate:
+                self.schemas.check(ev)
             spool.append(ev)
             self.store.insert(ev)
         return ev
 
-    def emit_object(self, obj: dict) -> dict:
+    def emit_object(self, obj: dict, validate: bool = False) -> dict:
         """Emit from a partial event object holding at least "type"."""
         if not isinstance(obj, dict) or not obj.get("type"):
             raise EventError("input object needs a non-empty \"type\"")
         attrs = {k: obj[k] for k in _SETTABLE if k in obj}
-        return self.emit(obj["type"], **attrs)
+        return self.emit(obj["type"], validate=validate, **attrs)
 
     def ingest(self, since: str = "") -> int:
         """Scan spool files for new complete lines; store new events. Return count new.

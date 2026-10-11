@@ -34,6 +34,9 @@ uv run messnet state get 'backup.*'
   Point =spool= at a Syncthing folder to share; each node writes only
   its own directory.  =lan= / =host= events go to a local, unsynced spool.
 - store :: local SQLite index of everything known (rebuildable).
+- schema :: optional JSON Schema per event type (=etc/schemas/<type>.json=,
+  shared like the rest of =etc=); =emit= checks =data= against it and
+  =messnet validate= audits stored events.  Replication never checks.
 - state :: newest event per =(type, origin, subject)= as
   =<state>/<type>/<origin>/<subject>.json= — read these from prompts
   and panels; they work offline and need no messnet process.

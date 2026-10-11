@@ -9,15 +9,11 @@ looks like (the base schema), how event types are named, how the schema
 of an event's payload is defined, versioned and distributed, and how
 messnet uses it.
 
-Status matters here, so each section says which parts exist in the code
-today and which are a design that is not yet implemented:
-
-- *Implemented*: the base envelope, its validation, type globbing,
-  the =emit= / =tail= / =state= commands, and the built-in
-  =messnet.link.v1= event.
-- *Proposed*: per-type payload schemas, their distribution under
-  =etc/schemas/=, and validation against them.  Nothing in the code
-  reads a schema file yet.
+In code, the envelope is checked by =event.py=; per-type payload
+schemas are found, linted and validated by =schema.py=; the commands are
+=messnet emit= (validates), =messnet schema list|show|check= and
+=messnet validate=.  The example schema below is the file
+=docs/schemas/backup.run.v1.json=, which the test suite keeps working.
 
 See [[file:plan.org]] for the protocol and module layout, [[file:design.org]]
 for the deployment and security model.
@@ -140,16 +136,21 @@ replication.
   string, integer and string respectively.  A CloudEvents consumer that
   does not know them can ignore them.
 
-** What is validated today
+** What is validated
 
-=event.validate= checks the envelope and nothing else: the object has
-=specversion=, =id=, =source=, =type=, =origin= and =seq=; =seq= is a
-positive integer; =scope= is one of the three; =type= and =origin= are
-non-empty.  It does /not/ look inside =data=, check the form of =type=,
-or consult any schema.  Replication is equally indifferent: a node
-stores and forwards events of types it has never heard of.  That is
-deliberate and stays true under the proposed design (see
-[[*Where validation happens]]).
+Validation has two layers.
+
+The *envelope* is checked by =event.validate= for every event made or
+read by any node: the object has =specversion=, =id=, =source=, =type=,
+=origin= and =seq=; =seq= is a positive integer; =scope= is one of the
+three; =type= and =origin= are non-empty.  It does /not/ look inside
+=data= or at the form of =type=.
+
+The *payload* is checked against the type's schema, but only by
+=messnet emit= and =messnet validate= (see [[*Using schema in messnet]]).
+Replication is deliberately indifferent: a node stores and forwards
+events of types it has never heard of, and ingest accepts any well
+formed envelope.
 
 * Event types
 
@@ -188,13 +189,21 @@ FAMILY.NOUN[.NOUN...].vN          backup.run.v1
   =backup.run.v2= are different types that happen to be related.
 - The family =messnet= is reserved for events messnet itself produces.
 
-This is a convention that tooling will check when schemas are
-implemented.  Today the only enforced rule is that the type is not
-empty, so =emit x= works.
+The form is a convention, and only partly enforced:
+
+- A type must be non-empty, always.  =emit x= works.
+- A type that does not match =family.noun.vN= (at least three segments,
+  lower case, a version last) draws a warning from =emit=, and can never
+  have a schema: schema lookup is by file name, and only conventional
+  names are looked up.  This also means a hostile =type= cannot make a
+  node read files outside the schema directories.
+- =messnet schema check= rejects a schema file whose name is not a
+  conventional type.
 
 ** Matching
 
-Consumers match type names with shell-style globs (Python =fnmatch=):
+Consumers match type names with shell-style globs (=tail= uses SQLite
+=GLOB= and =state get= uses Python =fnmatch=; for type names they agree).
 =*= matches any run of characters /including dots/, so
 
 | glob            | matches                                              |
@@ -368,9 +377,8 @@ state from the store if you change your mind).
 
 * Defining payload schema
 
-/Proposed: not yet implemented./  The envelope has a fixed schema
-(above).  The schema of =data= is defined per type, and this is the part
-that is designed but not yet built.
+The envelope has a fixed schema (above).  The schema of =data= is
+defined per type, in a schema file.
 
 ** Format
 
@@ -388,7 +396,8 @@ etc/schemas/backup.run.v2.json
 etc/schemas/messnet.link.v1.json
 #+end_example
 
-For the =backup.run.v1= described above:
+For the =backup.run.v1= described above (this is
+=docs/schemas/backup.run.v1.json= in the source tree):
 
 #+begin_src json
 {
@@ -416,9 +425,15 @@ Notes:
   events.  Set it to =false= only for payloads you intend to freeze.
 - =x-messnet= is a vendor keyword; JSON Schema validators ignore
   unknown keywords.  It carries the parts of the definition that are
-  about the envelope (=subject=, usual =scope=, snapshot or log).
-- =description= is the human definition, for =messnet schema show= and
-  for whoever has to write the next producer.
+  about the envelope, and =schema check= rejects unknown keys or values:
+  | key         | values                  | effect                                  |
+  |-------------+-------------------------+-----------------------------------------|
+  | =subject=   | =required=, =optional=  | =required=: =emit= and =validate= reject an event without a subject |
+  | =scope=     | =host=, =lan=, =all=    | documentation: the usual scope; not enforced |
+  | =semantics= | =snapshot=, =log=       | documentation: how state consumers should read it |
+- =description= is the human definition, shown by =messnet schema show=,
+  and =schema check= insists on it.
+- =$id=, if present, must be =messnet:schema/<type>= (see below).
 
 ** Schema identity
 
@@ -441,16 +456,18 @@ wants one.
    text= prints well.  Require only what every producer can supply.
 4. Add a sentence or two of =description=, including when the event is
    emitted.
-5. Try it: =messnet emit TYPE …= from a shell, then =messnet tail= and
-   =messnet state get TYPE=.
-6. Let Syncthing distribute the file (next section).
+5. Lint it: =messnet schema check etc/schemas/FAMILY.NOUN.v1.json=.
+6. Try it: =messnet emit TYPE …= from a shell (a bad payload is
+   refused), then =messnet tail= and =messnet state get TYPE=.  A new
+   schema takes effect at the next =emit=; there is nothing to restart.
+7. Let Syncthing distribute the file (next section).
 
 For a breaking change, write a new file with the next version number
 instead; never edit a published schema incompatibly.
 
 * Distribution of schema
 
-/Proposed: not yet implemented./  Schema files are small, change rarely, are needed by every node that
+Schema files are small, change rarely, are needed by every node that
 produces or consumes the type, and must reach nodes that are sometimes
 offline.  messnet already has a mechanism for exactly that kind of file:
 the =etc= directory, shared by Syncthing, which carries =peers/= and
@@ -460,7 +477,7 @@ the =etc= directory, shared by Syncthing, which carries =peers/= and
 etc/
   peers/<node>.toml        node ids and advertised links
   networks/<name>.toml     link policy per network
-  schemas/<type>.json      payload schema per event type    (proposed)
+  schemas/<type>.json      payload schema per event type
 #+end_example
 
 Consequences:
@@ -470,9 +487,11 @@ Consequences:
   (a work server reached only by ssh) copy the directory some other way
   (=rsync=, a git checkout).  A node without a schema is not broken; it
   simply does not validate that type.
-- *Built-in schemas ship with the package*, in =src/messnet/schemas/=,
-  for the =messnet= family.  They are found after =etc/schemas/= so a
-  local file can override them for testing.
+- *Built-in schemas ship with the package*, in =src/messnet/schemas/=
+  (package data), for the =messnet= family; today that is
+  =messnet.link.v1=.  They are found after =etc/schemas/=, so a local
+  file overrides them; =messnet schema list= shows which one is in
+  effect (=local= or =built-in=).
 - *Authorship.*  Anyone who can write =etc= can add a schema, so this is
   as trusted as the peer directory.  Schemas are validation aids, not a
   security boundary: a schema cannot make a malicious peer's event safe,
@@ -485,13 +504,19 @@ Consequences:
   edit one file.  Treat published schemas as write-once and it does
   not happen; changes arrive as new files.
 
-Where =etc= is shared, a schema is added by copying a file on any one
-node.  A project that defines a family can keep its schema files in its
-own repository and install them with a copy or symlink into =etc/schemas/=.
+Where =etc= is shared, a schema is added by copying a file into
+=etc/schemas/= on any one node.  Nothing creates =etc/schemas/=; make
+it.  A project that defines a family can keep its schema files in its
+own repository and install them with a copy or symlink; this repository
+does that for its example:
+
+#+begin_example
+mkdir -p "$(messnet config show | jq -r .etc)/schemas"
+cp docs/schemas/backup.run.v1.json "$(messnet config show | jq -r .etc)/schemas/"
+messnet schema list
+#+end_example
 
 * Using schema in messnet
-
-/Proposed: not yet implemented./
 
 ** Where validation happens
 
@@ -499,20 +524,28 @@ Validation exists to catch mistakes early and cheaply, never to refuse
 to carry data.  The principle is *validate at the edges, forward in the
 middle*:
 
-- =messnet emit=, /producer side/.  If a schema exists for the type,
-  =data= is checked before the event is sequenced and written.  A
-  failure is an error (non-zero exit, nothing emitted), because here
-  there is a person or a script to tell.  A =--no-validate= flag skips
-  the check.  No schema means no check.
+- =messnet emit=, /producer side/ (both the =TYPE= form and
+  =--stdin=).  If a schema exists for the type, the event is checked
+  before it is written.  A failure is an error (exit status 1, nothing
+  written, no =seq= consumed), because here there is a person or a
+  script to tell.  =--no-validate= skips the check; it is how you emit
+  a deliberately odd event, or work around a broken schema file.  No
+  schema means no check.  Events that messnet emits about itself
+  (=messnet.link.v1= from link sessions) are not validated; they are
+  built by code and checked by the test suite against the built-in
+  schema.
 - *Ingest and replication*: no validation.  A node stores and forwards
   every well-formed envelope.  Otherwise a node with an old or missing
   schema would silently break delivery to nodes beyond it, and a bug in
   one producer would stop being visible because its events were never
   stored.
 - *Consumers* (=tail=, =state=, a prompt script) may validate when they
-  want to, with =messnet validate [-t GLOB]=, which reads events and
+  want to, with =messnet validate=, which reads stored events and
   reports those that do not conform to their type's schema.  This is the
-  audit tool for finding the offending producer.
+  audit tool for finding the offending producer.  It prints one line per
+  offender (=origin/scope/seq type: problem=), a count on stderr, and
+  exits 1 if any were found, so it also works from cron.  Events whose
+  type has no schema are neither checked nor counted.
 
 Events that fail validation at the consumer should be skipped or
 flagged by that consumer; they are never removed from the spool.
@@ -520,15 +553,30 @@ flagged by that consumer; they are never removed from the spool.
 ** Commands
 
 #+begin_example
-messnet schema list                  # known types, from etc/schemas and built-ins
-messnet schema show backup.run.v1    # print schema and description
-messnet schema check FILE            # lint a schema file: valid JSON Schema, name matches
-messnet validate [-t GLOB] [--since 1d]   # check stored events against their schemas
+messnet emit TYPE … [--validate|--no-validate]   # default: validate
+messnet schema list                  # types with a schema, and local or built-in
+messnet schema show backup.run.v1    # print the schema (the description is inside it)
+messnet schema check FILE…           # lint: valid JSON Schema, file name is a type,
+                                     #   $id, description and x-messnet are sane
+messnet validate [-t GLOB] [-o ORIGIN] [--since 1d]   # audit stored events
 #+end_example
 
-Each follows the project convention: logic in a library module
-(=schema.py=: find, load, validate), Click-only commands in =cli.py=,
-tests in =tests/=.  The envelope check stays in =event.py=.
+For example, against the =backup.run.v1= schema installed above:
+
+#+begin_example
+$ messnet emit backup.run.v1 -s push result=ok n=3
+Error: backup.run.v1 does not match its schema: data.n: '3' is not of type 'integer'
+$ messnet emit backup.run.v1 -s push result=ok n:=3
+$ messnet emit backup.run.v1 -s pull result=maybe --no-validate
+$ messnet validate
+t/all/2 backup.run.v1: data.result: 'maybe' is not one of ['ok', 'fail']
+2 events checked, 1 invalid
+#+end_example
+
+The logic is in =schema.py= (find, load, lint, validate); =node.py=
+applies it in =Node.emit(validate=True)=; =cli.py= only has the Click
+commands; =event.py= keeps the envelope check.  The validator is the
+[[https://python-jsonschema.readthedocs.io/][jsonschema]] package.
 
 ** What consumers can rely on
 
@@ -549,6 +597,8 @@ state it reads may predate the schema.
 - =k=v= makes a string, =k:=json= makes any JSON value.
 - Compatible change: add an optional field, keep =vN=.  Incompatible
   change: new file, new =vN+1=; keep the old schema forever.
-- Schema (proposed): =etc/schemas/<type>.json=, JSON Schema for =data=,
-  distributed by Syncthing with the rest of =etc=, validated at =emit=,
-  never at ingest or replication.
+- Schema: =etc/schemas/<type>.json= (or built-in), JSON Schema for
+  =data= plus =x-messnet= for the envelope; distributed by Syncthing
+  with the rest of =etc=; checked by =emit= (unless =--no-validate=) and
+  audited by =messnet validate=; never checked at ingest or replication.
+- Lint a new schema with =messnet schema check FILE=.

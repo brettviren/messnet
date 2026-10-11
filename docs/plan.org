@@ -14,7 +14,8 @@ gonc, and Syncthing (as a slow, always-available path).
 - node :: one identity per host/account, named e.g. =hokum.bv=.  It
   is the /origin/ of the events it emits.
 
-- event :: CloudEvents 1.0 JSON object (structured mode) with the
+- event :: (see [[file:events.org]] for the schema, type names and
+  versioning) CloudEvents 1.0 JSON object (structured mode) with the
   messnet extension attributes =origin=, =seq= and =scope=:
 
   #+begin_src json
@@ -138,6 +139,7 @@ again, so pruned events are not re-replicated.
 | =ulid.py=       | ULID generation                                        |
 | =config.py=     | XDG + layered config (env → file → CLI)                |
 | =event.py=      | build / validate / parse events, =k=v= data parsing    |
+| =schema.py=     | per-type payload schemas: find, lint, validate         |
 | =spool.py=      | JSONL spool: append own events, incremental reading    |
 | =store.py=      | SQLite store: insert, query, version vector, cursors   |
 | =node.py=       | composition: emit, ingest, follow                      |
@@ -157,13 +159,15 @@ again, so pruned events are not re-replicated.
 * CLI
 
 #+begin_example
-messnet emit TYPE [k=v|k:=json ...] [-s SUBJECT] [--scope S] [--producer P]
+messnet emit TYPE [k=v|k:=json ...] [-s SUBJECT] [--scope S] [--producer P] [--no-validate]
 messnet emit --stdin                 # JSON lines with at least "type"
 messnet tail [-t GLOB] [--since 1d] [-f] [--origin O]
 messnet state get [GLOB]             # print materialized state
 messnet state update                 # rebuild state files from store
 messnet ingest                       # scan spool into store
 messnet vv                           # print version vector
+messnet schema list|show TYPE|check FILE…   # payload schemas (etc/schemas, built-in)
+messnet validate [-t GLOB] [--since 1d]     # audit stored events against schemas
 messnet link --stdio                 # serve protocol on stdin/stdout (for ssh)
 messnet serve -l HOST:PORT           # accept tcp links
 messnet connect tcp HOST:PORT | ssh ALIAS | cmd -- ARGV…
