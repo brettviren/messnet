@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "messnet:schema/restic.prime.v1",
+  "title": "restic.prime.v1",
+  "description": "The repository password store was primed: the password was fetched from the password manager and cached for unattended backups, for ttl seconds.  Emitted on success and on failure.  Subject: which password, 'local' or 'remote' (the repository it opens).  Carries neither the password nor the name of its entry in the password manager.",
+  "type": "object",
+  "required": ["result"],
+  "properties": {
+    "result": {"enum": ["ok", "fail"]},
+    "ttl": {"type": "integer", "minimum": 1, "description": "Seconds the cached password stays valid, counted from the time of priming."},
+    "expires": {"type": "string", "description": "RFC 3339 time the cached password stops being valid."},
+    "error": {"type": "string", "description": "Why priming failed.  Required when result is fail."}
+  },
+  "allOf": [
+    {"if": {"required": ["result"], "properties": {"result": {"const": "ok"}}},
+     "then": {"required": ["ttl", "expires"]}},
+    {"if": {"required": ["result"], "properties": {"result": {"const": "fail"}}},
+     "then": {"required": ["error"]}}
+  ],
+  "additionalProperties": true,
+  "x-messnet": {"subject": "required", "scope": "all", "semantics": "snapshot"}
+}

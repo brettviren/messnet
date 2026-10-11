@@ -72,14 +72,14 @@ def test_emit_object_validates(make_node):
 
 def test_builtin_link_schema_and_local_override(make_node, tmp_path):
     n = make_node("a")
-    assert n.schemas.types() == {"messnet.link.v1": "built-in"}
+    assert n.schemas.types()["messnet.link.v1"] == "built-in"
     n.emit("messnet.link.v1", {"state": "up", "link": "tcp x", "scope": "all"}, subject="b",
            scope="host", validate=True)
     with pytest.raises(SchemaError, match="data.state"):
         n.emit("messnet.link.v1", {"state": "sideways"}, subject="b", scope="host", validate=True)
     put_schema(n.cfg.etc, "messnet.link.v1", {"type": "object", "required": ["only"]})
     fresh = Schemas(n.cfg.etc)
-    assert fresh.types() == {"messnet.link.v1": "local"}
+    assert fresh.types()["messnet.link.v1"] == "local"
     assert fresh.problems({"type": "messnet.link.v1", "data": {"state": "up"}})
 
 
@@ -132,7 +132,9 @@ def test_cli_emit_validates(tmp_path):
 
 def test_cli_schema_commands(tmp_path):
     put_schema(tmp_path / "etc", "backup.run.v1")
-    assert run(tmp_path, "schema", "list").splitlines() == ["backup.run.v1 local", "messnet.link.v1 built-in"]
+    listing = run(tmp_path, "schema", "list").splitlines()
+    assert listing[0] == "backup.run.v1 local"
+    assert "messnet.link.v1 built-in" in listing and "restic.commit.v1 built-in" in listing
     assert json.loads(run(tmp_path, "schema", "show", "backup.run.v1"))["required"] == ["result"]
     assert "no schema" in run(tmp_path, "schema", "show", "no.such.v1", codes=(1,))
     assert run(tmp_path, "schema", "check", str(tmp_path / "etc/schemas/backup.run.v1.json")) == ""

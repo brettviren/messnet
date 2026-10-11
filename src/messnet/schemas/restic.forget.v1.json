@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "messnet:schema/restic.forget.v1",
+  "title": "restic.forget.v1",
+  "description": "Retention was applied to a repository: old snapshots were forgotten and, if prune is true, their data removed (restic forget [--prune]).  It runs before a backup, can fail on its own, and does not produce a commit, so it has its own event.  Subject: the stream it belongs to, using the labels of restic.commit.v1 (e.g. 'run').",
+  "type": "object",
+  "required": ["result", "repository", "location"],
+  "properties": {
+    "result": {"enum": ["ok", "fail"]},
+    "repository": {"type": "string", "minLength": 1, "description": "Repository the policy was applied to, with any password removed."},
+    "location": {"enum": ["local", "remote"]},
+    "prune": {"type": "boolean", "description": "Whether unreferenced data was removed too."},
+    "keep_policy": {
+      "type": "object",
+      "description": "The retention policy, keyed by restic's --keep-* option without the prefix, e.g. {\"last\": 2, \"daily\": 7}.",
+      "additionalProperties": {"type": "integer", "minimum": 0}
+    },
+    "snapshots_kept": {"type": "integer", "minimum": 0},
+    "snapshots_removed": {"type": "integer", "minimum": 0},
+    "started": {"type": "string", "description": "RFC 3339 time the operation began."},
+    "ended": {"type": "string", "description": "RFC 3339 time the operation finished."},
+    "duration": {"type": "number", "minimum": 0, "description": "Seconds the operation took."},
+    "exit_code": {"type": "integer", "minimum": 0},
+    "error": {"type": "string", "description": "What went wrong, in restic's words.  Required when result is fail."},
+    "restic_version": {"type": "string"}
+  },
+  "allOf": [
+    {"if": {"required": ["result"], "properties": {"result": {"const": "fail"}}},
+     "then": {"required": ["error"]}}
+  ],
+  "additionalProperties": true,
+  "x-messnet": {"subject": "required", "scope": "all", "semantics": "snapshot"}
+}

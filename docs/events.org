@@ -12,8 +12,10 @@ messnet uses it.
 In code, the envelope is checked by =event.py=; per-type payload
 schemas are found, linted and validated by =schema.py=; the commands are
 =messnet emit= (validates), =messnet schema list|show|check= and
-=messnet validate=.  The example schema below is the file
-=docs/schemas/backup.run.v1.json=, which the test suite keeps working.
+=messnet validate=.  The small =backup= family used for illustration
+below has its schema in =docs/schemas/backup.run.v1.json= (kept working
+by the test suite); the real, shipped example is the =restic= family
+(see [[*The =restic= family]]).
 
 See [[file:plan.org]] for the protocol and module layout, [[file:design.org]]
 for the deployment and security model.
@@ -232,9 +234,11 @@ family.  It states:
 
 *** Example: the =backup= family
 
-The =backup= family reports on a backup script (=~/scripts/backup=).
-This is the example used in the =emit= help
-(=messnet emit backup.run.v1 -s push phase=push result=ok=).
+The =backup= family is a deliberately small example, the one used in the
+=emit= help (=messnet emit backup.run.v1 -s push phase=push result=ok=).
+Nothing emits it any more: the backup script reports with the much
+fuller =restic= family (see [[*The =restic= family]]).  It stays here
+because it is small enough to read in one go.
 
 *backup.run.v1* is emitted each time a step of the backup script
 finishes, whether it succeeded or not.
@@ -272,7 +276,7 @@ to send strings unless they take care; either design the schema to
 accept the string form or document the =key:=json= form where the
 field is numeric.
 
-A later addition to the family might be =backup.verify.v1= for a
+A later addition to this family might be =backup.verify.v1= for a
 restore-check.  It would have its own definition, its own subjects, and
 no relationship to =backup.run.v1= beyond the shared prefix, which lets
 a consumer subscribe to =backup.*=.
@@ -305,6 +309,182 @@ emitted with =scope=host= and =source=messnet://NODE/link=.
 | =error=    | string  | why the session ended, when it ended badly               |
 
 It is what =messnet links= prints.
+
+** The =restic= family
+
+The =restic= family describes what a restic-based backup does.  It is
+built in (=src/messnet/schemas/restic.*.json=) and is emitted by
+=~/scripts/backup= whenever the =messnet= and =jq= commands are
+installed.  Four types:
+
+| type               | subject                      | one event is...                                     |
+|--------------------+------------------------------+-----------------------------------------------------|
+| =restic.commit.v1= | stream: =run=, =run/NAME=, =push= | one attempt to put a snapshot in a repository, ok or not |
+| =restic.forget.v1= | stream: =run=                | retention (=forget --prune=) applied to a repository |
+| =restic.prime.v1=  | =local= or =remote=          | the repository password cache was primed            |
+| =restic.status.v1= | =backup=                     | a roll-up of the latest of all the above            |
+
+*** Streams, and why commit has a =method=
+
+A /stream/ is a sequence of like attempts whose /latest/ outcome is what
+a status display wants.  Its label is the =subject= of =restic.commit.v1=
+and =restic.forget.v1=:
+
+- =run= :: the main backup (=backup run=): =$HOME= into the local repository.
+- =run/NAME= :: an extra tree backed up in the same run (the syncthing
+  trees on one host), =NAME= being the directory's base name.
+- =push= :: the transfer of the local repository's snapshots to the
+  remote one (=backup push=, =restic copy=).
+
+The stream says /which job/; the data says /what happened/.  restic can
+also back up straight to a remote repository, and a =push= does not read
+a file system, so the facts a reader needs are not implied by the label.
+They are explicit fields:
+
+- =method= :: =backup= (a file system was read: =paths=, =snapshot_id=
+  and restic's file statistics) or =copy= (existing snapshots were
+  transferred: =source_repository=, =snapshots_copied=, and a =snapshots=
+  list of =id= / =source_id= / =packs=).
+- =repository= and =location= :: the destination, as restic names it
+  (credentials in URLs are stripped), and =local= (a path on this host)
+  or =remote= (any backend with a scheme: =sftp:=, =rest:=, =s3:=...).
+  A =run= straight to a remote repository is simply =method=backup=,
+  =location=remote=.
+
+*** restic.commit.v1
+
+Emitted for every attempt, successful or not.
+
+- =result= :: =ok=; =partial= (a snapshot was made but some source files
+  could not be read, restic exit status 3); or =fail=.  A backup script
+  may treat =partial= as a failure, as =~/scripts/backup= does, while
+  the event keeps the distinction.
+- =error= :: required unless =ok=; restic's own words, e.g. =Fatal:
+  wrong password or no key found=.  =error_count= counts the unreadable
+  items of a partial backup.  =exit_code= is restic's exit status.
+- The statistics use restic's own names, from its =backup --json=
+  summary: =files_new= / =files_changed= / =files_unmodified=, the same
+  three for =dirs_=, =data_blobs=, =tree_blobs=, =data_added= (bytes
+  added to the repository), =data_added_packed= (as stored),
+  =total_files_processed=, =total_bytes_processed=.
+- =started=, =ended= and =duration= (seconds) are restic's for a backup
+  and the script's measurements otherwise.  For a copy,
+  =total_files_processed= and =total_bytes_processed= are summed over the
+  snapshots copied (from their summaries), since =restic copy= reports
+  only snapshots and packs.
+- =restic_version= is the version that ran.
+
+A backup, as emitted by =backup run=:
+
+#+begin_src json
+{"type":"restic.commit.v1","subject":"run","scope":"all",
+ "data":{"result":"ok","method":"backup","repository":"/srv/bv/backups/restic",
+  "location":"local","paths":["/home/bv"],"exit_code":0,
+  "started":"2026-10-11T08:45:37.596-04:00","ended":"2026-10-11T08:45:38.294-04:00",
+  "duration":0.6975,"restic_version":"0.18.0",
+  "files_new":7,"files_changed":0,"files_unmodified":0,
+  "dirs_new":15,"dirs_changed":0,"dirs_unmodified":0,"data_blobs":5,"tree_blobs":16,
+  "data_added":59171,"data_added_packed":56030,
+  "total_files_processed":7,"total_bytes_processed":51206,
+  "snapshot_id":"cec6307ad63d2007e9e428348fa52e8ea83b169d733efad0048e9ef8986ed984"}}
+#+end_src
+
+and a transfer, as emitted by =backup push= (abridged):
+
+#+begin_src json
+{"type":"restic.commit.v1","subject":"push","scope":"all",
+ "data":{"result":"ok","method":"copy","location":"remote",
+  "repository":"sftp:bv@backup.example.org:/backups/restic",
+  "source_repository":"/srv/bv/backups/restic","snapshots_copied":2,
+  "snapshots":[{"id":"9c3e0bab","source_id":"81700b4f","packs":3},
+               {"id":"f86c62b2","source_id":"6791e983","packs":6}],
+  "exit_code":0,"duration":1.423,
+  "total_files_processed":75,"total_bytes_processed":329962}}
+#+end_src
+
+Nothing to transfer is =ok= with =snapshots_copied= 0.
+
+*** restic.forget.v1
+
+=backup run= applies the retention policy before it backs up.  That step
+can fail on its own and makes a run fail, yet produces no commit, so it
+has its own event.  Fields: =result= (=ok= or =fail=), =repository=,
+=location=, =prune=, =keep_policy= (an object like ={"last":2,"daily":7}=,
+the =--keep-*= options), =snapshots_kept= and =snapshots_removed=
+(on success), =error= (on failure), and the timing and =exit_code= fields
+of commit.
+
+*** restic.prime.v1
+
+The backup runs unattended and cannot ask for the repository password,
+so it is fetched from the password manager ahead of time and cached for
+a while (=backup prime=).  The event says when that happened and how
+long it lasts: =result= (=ok= or =fail=), =ttl= (seconds the cached
+password stays valid) and =expires= (the time that ends), or =error=
+(required on failure).  The subject says which password: =local= or
+=remote=.  It carries neither the password nor the name of its entry in
+the password manager, and neither does a failure message.
+
+*** restic.status.v1
+
+The union that a prompt or panel wants in one place: the latest commit
+of every stream (backing up and transferring alike), the latest forget
+of every stream, and the state of the password cache.  It is a derived
+event: the backup script builds it from messnet's own state (the newest
+=restic.commit.v1= and =restic.forget.v1= per stream and origin) after
+every =run=, =push=, =full= and =prime=, and when =backup status= is
+asked, so reading the single state file
+=<state>/restic.status.v1/<origin>/backup.json= answers "are my backups
+healthy?" without knowing the streams.
+
+- =result= :: the worst result of the latest commits and forgets: =fail=
+  if any failed, else =partial= if any was, else =ok=; =unknown= when
+  there are none.  It is about backups only; a password close to expiry
+  is not a failure, so it is reported separately.
+- =commits= :: stream label to an abridged commit: =result=, =time=
+  (when the event was made), =method=, =location=, =repository=,
+  =snapshot_id= or =snapshots_copied=, =total_files_processed=,
+  =total_bytes_processed=, =data_added=, =duration=, =exit_code= and
+  =error=.
+- =forget= :: the same for retention (present once one was seen).
+- =prime= :: per password (=local=, and =remote= when one is configured):
+  =primed= (a valid cached password exists), =ttl_remaining= (seconds;
+  rounded to the kernel keyring's resolution when the exact expiry is
+  unknown) and =expires= (when known exactly).
+
+A consumer reading it, with the fish prompt in mind:
+
+#+begin_example
+jq -r '"\(.data.result) \(.data.commits | length) streams; local password \(
+  if .data.prime.local.primed then "ok" else "NOT PRIMED" end)"' \
+  ~/.cache/messnet/state/restic.status.v1/hokum.bv/backup.json
+#+end_example
+
+Because the roll-up only has the /latest/ event of each stream, it says
+how a stream stands, not how long it has been failing; for that, =messnet
+tail -t 'restic.commit.v1' --since 7d= gives the history.
+
+*** How the backup script reports
+
+- The events are made from restic's own output: =restic backup --json=
+  for backups, and the text output of =copy= and =forget= (restic has
+  no JSON mode for them).  The script still writes restic's usual text
+  to its log.  Because JSON output is collected first, a backup's
+  output now reaches the log when the backup finishes, not as it goes.
+- Reporting never affects the backup.  An =emit= that fails (or times out
+  after a minute) is logged and ignored; the exit status is what it would
+  have been without messnet.  With no =messnet= or no =jq= installed, or
+  =BACKUP_MESSNET=0= in the host's config file, nothing is emitted and
+  nothing changes.
+- The events are emitted with =-P backup=, so =source= is
+  =messnet://HOST/USER/backup=, and with the default =scope=all=, so every
+  node can show how every other host's backups stand.  =emit= validates
+  them against the schemas above, so a mismatch between the script and a
+  schema shows up in the log as a failed emit.
+- =tests/data/restic-events.jsonl= holds events the script made when run
+  against scratch repositories (successes, a partial backup, failures, a
+  transfer with nothing to transfer, failed primes, roll-ups).  The test
+  suite checks they satisfy the schemas.
 
 * Versioning
 
@@ -488,8 +668,8 @@ Consequences:
   (=rsync=, a git checkout).  A node without a schema is not broken; it
   simply does not validate that type.
 - *Built-in schemas ship with the package*, in =src/messnet/schemas/=
-  (package data), for the =messnet= family; today that is
-  =messnet.link.v1=.  They are found after =etc/schemas/=, so a local
+  (package data), for the =messnet= family (=messnet.link.v1=) and the
+  =restic= family.  They are found after =etc/schemas/=, so a local
   file overrides them; =messnet schema list= shows which one is in
   effect (=local= or =built-in=).
 - *Authorship.*  Anyone who can write =etc= can add a schema, so this is

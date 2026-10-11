@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "messnet:schema/restic.status.v1",
+  "title": "restic.status.v1",
+  "description": "Where backups stand on a host: the latest restic.commit.v1 of every stream (backing up and transferring alike), the latest restic.forget.v1 of every stream, and whether the repository passwords are primed.  It is a roll-up of the other restic events plus a look at the password cache, emitted after every backup, transfer and priming and by 'backup status', so one state file answers 'are my backups healthy?'.  Subject: the backup job, 'backup'.",
+  "type": "object",
+  "required": ["result", "commits", "prime"],
+  "$defs": {
+    "outcome": {
+      "type": "object",
+      "description": "The newest event of one stream, abridged: restic.commit.v1 or restic.forget.v1 fields of the same names.",
+      "required": ["result", "time"],
+      "properties": {
+        "result": {"enum": ["ok", "partial", "fail"]},
+        "time": {"type": "string", "description": "When that event was emitted (RFC 3339)."},
+        "method": {"enum": ["backup", "copy"]},
+        "location": {"enum": ["local", "remote"]},
+        "repository": {"type": "string"},
+        "snapshot_id": {"type": "string"},
+        "snapshots_copied": {"type": "integer", "minimum": 0},
+        "snapshots_removed": {"type": "integer", "minimum": 0},
+        "total_files_processed": {"type": "integer", "minimum": 0},
+        "total_bytes_processed": {"type": "integer", "minimum": 0},
+        "data_added": {"type": "integer", "minimum": 0},
+        "duration": {"type": "number", "minimum": 0},
+        "exit_code": {"type": "integer", "minimum": 0},
+        "error": {"type": "string"}
+      }
+    }
+  },
+  "properties": {
+    "result": {
+      "enum": ["ok", "partial", "fail", "unknown"],
+      "description": "The worst result among commits and forgets: fail if any failed, else partial if any was partial, else ok; unknown if there are none.  Says nothing about the password, see prime."
+    },
+    "commits": {
+      "type": "object",
+      "description": "Latest restic.commit.v1 per subject (stream).",
+      "additionalProperties": {"$ref": "#/$defs/outcome"}
+    },
+    "forget": {
+      "type": "object",
+      "description": "Latest restic.forget.v1 per subject (stream).",
+      "additionalProperties": {"$ref": "#/$defs/outcome"}
+    },
+    "prime": {
+      "type": "object",
+      "description": "The password cache, per password ('local', 'remote'), as seen when the event was made.",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["primed"],
+        "properties": {
+          "primed": {"type": "boolean", "description": "Whether a valid cached password exists."},
+          "ttl_remaining": {"type": "integer", "minimum": 0, "description": "Seconds left; rounded to the cache's own resolution when the exact time is unknown."},
+          "expires": {"type": "string", "description": "RFC 3339 expiry, present only when known exactly."},
+          "error": {"type": "string", "description": "Why the cache could not be examined."}
+        }
+      }
+    }
+  },
+  "additionalProperties": true,
+  "x-messnet": {"subject": "required", "scope": "all", "semantics": "snapshot"}
+}

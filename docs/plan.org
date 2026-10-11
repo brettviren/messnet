@@ -200,6 +200,7 @@ messnet config methods [--host N]    # show methods
    relayed through nodes that are not trusted).
 
 Producers / consumers (separate track, start after phase 1):
-=~/scripts/backup= emit, fish tide item reading state, cron wrapper
+=~/scripts/backup= emit (done: the =restic.*= events, see
+[[file:events.org]]), fish tide item reading state, cron wrapper
 (=messnet wrap -- cmd=), arbtt adapter, fish postexec (=scope=host=),
 ntfy forwarder, DuckDB report, announce/heartbeat events.
