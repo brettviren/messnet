@@ -10,7 +10,7 @@ import sys
 
 import click
 
-from messnet import daemon, daemonize, install, lock, logsetup, manager, netdetect, peers, state
+from messnet import daemon, daemonize, install, lock, logsetup, manager, netdetect, peers, state, subscribe
 from messnet.cli_config import config_grp
 from messnet.config import config_file, load_config
 from messnet.event import EventError, default_source, dumps, parse_assignments
@@ -403,6 +403,66 @@ def id_cmd(ctx):
 def run(ctx):
     """Run the node service in the foreground: like 'serve --foreground'."""
     _run_exclusive(ctx, daemon.run)
+
+
+@cli.command("subscribe", context_settings=CONTEXT)
+@click.option("-t", "--type", "types", multiple=True, help="Type glob, e.g. 'backup.*' (repeatable); default all.")
+@click.option("-o", "--origin", help="Only events from this origin node.")
+@click.option("--replay", type=click.IntRange(0), default=0, show_default=True,
+              help="First send the last N matching events.")
+@click.option("-n", "--count", type=click.IntRange(1), help="Stop after N events.")
+@click.option("--connect", "target", help="unix:PATH or HOST:PORT of a node's publisher (default: this node's).")
+@click.option("--format", "fmt", type=click.Choice(["json", "text"]), default="json", show_default=True)
+@click.pass_context
+def subscribe_cmd(ctx, types, origin, replay, count, target, fmt):
+    """Print every event the node receives, as it arrives (a pure consumer of its publisher).
+
+    Needs 'messnet serve' running.  Unlike 'tail -f' this talks to the daemon, so it sees
+    events received over links the moment they arrive, and --connect can name another
+    host's publisher (over ssh: ssh HOST messnet subscribe).  With no options it prints all.
+    """
+    async def main():
+        shown = 0
+        where = target or subscribe.default_target(ctx.obj)
+        async for ev in subscribe.subscribe(where, types, origin, replay):
+            _echo_events([ev], fmt)
+            sys.stdout.flush()
+            shown += 1
+            if count and shown >= count:
+                return
+
+    try:
+        _run_async(main())
+    except subscribe.SubscribeError as err:
+        raise click.ClickException(str(err)) from err
+
+
+@cli.command("tui", context_settings=CONTEXT)
+@click.option("--connect", "target", help="unix:PATH or HOST:PORT of a node's publisher (default: this node's).")
+@click.option("--no-live", is_flag=True, help="Follow the state files only; do not connect to the node.")
+@click.pass_context
+def tui_cmd(ctx, target, no_live):
+    """Watch the network in a terminal: hosts or event types, their events, and the newest event.
+
+    Reads the state files (so it works even if nothing is running) and, for live updates,
+    the node's publisher or its 'latest' file.  h / t switch between the host and
+    event-type views, Tab changes pane, r refreshes, q quits.
+    """
+    try:
+        from messnet.tui import MessnetTui
+    except ImportError as err:
+        raise click.ClickException("the terminal UI needs the 'textual' package: install messnet with its 'tui' extra "
+                                   "(uv tool install --editable '.[tui]', or pip install 'messnet[tui]')") from err
+    cfg = ctx.obj
+    if no_live:
+        where = latest = None
+    else:
+        try:
+            where = target or subscribe.default_target(cfg)
+        except subscribe.SubscribeError:
+            where = None
+        latest = cfg.latest
+    MessnetTui(cfg.state, where, latest, cfg.node).run()
 
 
 @cli.command(context_settings=CONTEXT)

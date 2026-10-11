@@ -1,9 +1,11 @@
 """The node service follows its configuration file and the peer directory."""
 
 import asyncio
+import json
 import logging
 import socket
 import types
+from pathlib import Path
 
 import pytest
 
@@ -48,6 +50,8 @@ key = "{tmp_path / name / 'key'}"
 log = "{tmp_path / name / 'serve.log'}"
 poll = 0.02
 tcp_auth = false
+latest = "off"
+publish = []
 '''
         self.node = None
 
@@ -483,3 +487,40 @@ def test_install_list_mentions_the_log(tmp_path):
     assert "log:" not in run(tmp_path, "install", "--list")
     (tmp_path / "serve.log").write_text("x\n")
     assert f"log: {tmp_path / 'serve.log'} (info)" in run(tmp_path, "install", "--list")
+
+
+def test_publisher_and_latest_file_follow_the_config(env, tmp_path):
+    import shutil
+    import tempfile
+    sockdir = Path(tempfile.mkdtemp(prefix="mn-"))
+    sock, latest = sockdir / "e.sock", tmp_path / "latest.json"
+    env.top = env.top.replace('latest = "off"\npublish = []\n', "")           # these tests set their own
+    env.start('latest = "off"\npublish = []\n')
+
+    async def main():
+        svc = Service(env.node)
+        await svc.reconcile()
+        try:
+            assert set(svc.components) == {("maintain",)}
+            env.write(f'latest = "{latest}"\npublish = [{{kind = "unix", path = "{sock}"}}]\n')
+            await env.apply(svc)
+            assert sorted(k[0] for k in svc.components) == ["latest", "maintain", "publish"]
+            assert sock.exists()
+            env.node.emit("seen.v1", {"x": 1})
+            for _ in range(100):
+                if latest.exists():
+                    break
+                await asyncio.sleep(0.05)
+            assert json.loads(latest.read_text())["type"] == "seen.v1"
+            env.write('latest = "off"\npublish = []\n')                              # and switched off again
+            await env.apply(svc)
+            assert set(svc.components) == {("maintain",)} and not sock.exists()
+            env.write('publish = [{kind = "carrier-pigeon"}]\n')                    # a bad entry is rejected whole
+            await env.apply(svc)
+            assert set(svc.components) == {("maintain",)}
+        finally:
+            for comp in svc.components.values():
+                await comp.stop()
+            shutil.rmtree(sockdir, ignore_errors=True)
+
+    asyncio.run(main())
