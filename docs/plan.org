@@ -154,6 +154,8 @@ again, so pruned events are not re-replicated.
 | =iroh_link.py=  | optional iroh transport (dial, serve, authorize)       |
 | =gonc.py=       | gonc dial / responder commands, policy classes         |
 | =daemon.py=     | =run=: ingest loop, state updates, link supervisor     |
+| =lock.py=       | one node service per store (=flock=), for serve / run  |
+| =install.py=    | install / list / remove cron and systemd entries       |
 | =cli.py=        | Click commands only                                    |
 
 * CLI
@@ -172,6 +174,9 @@ messnet link --stdio                 # serve protocol on stdin/stdout (for ssh)
 messnet serve -l HOST:PORT           # accept tcp links
 messnet connect tcp HOST:PORT | ssh ALIAS | cmd -- ARGV…
 messnet run                          # daemon: ingest, state, configured links
+messnet serve [-l HOST:PORT ...]     # same without -l; one instance per store
+messnet install cron|systemd|--list  # keep serve running (idempotent)
+messnet uninstall cron|systemd       # undo; not installed is a no-op
 messnet config show [--file]         # effective configuration / raw file
 messnet config set|unset KEY [VALUE] # node, etc, spool, peers, ...
 messnet config add [--host N] KIND … # tcp|ssh|cmd|iroh|gonc method

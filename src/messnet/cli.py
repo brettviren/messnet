@@ -9,7 +9,7 @@ import sys
 
 import click
 
-from messnet import daemon, manager, netdetect, peers, state
+from messnet import daemon, install, lock, manager, netdetect, peers, state
 from messnet.cli_config import config_grp
 from messnet.config import config_file, load_config
 from messnet.event import EventError, default_source, dumps, parse_assignments
@@ -75,8 +75,10 @@ def cli(ctx, config_path, node, spool, db, state, etc, network, verbose):
         click.echo(ctx.get_help())
         ctx.exit()
     ctx.meta["config_file"] = config_file(config_path)
+    ctx.meta["global_opts"] = dict(config_path=config_path, node=node, spool=spool, db=db, state=state,
+                                   etc=etc, network=network)
     try:
-        ctx.obj = load_config(config_path, must_exist=ctx.invoked_subcommand != "config",
+        ctx.obj = load_config(config_path, must_exist=ctx.invoked_subcommand not in ("config", "uninstall"),
                               node=node, spool=spool, db=db, state=state, etc=etc, network=network)
     except (OSError, ValueError) as err:
         raise click.ClickException(str(err)) from err
@@ -202,15 +204,40 @@ def link(ctx, stdio, maintain, scope):
     _run_async(daemon.run_stdio(_node(ctx), scope, maintain))
 
 
-@cli.command(context_settings=CONTEXT, no_args_is_help=True)
-@click.option("-l", "--listen", "addrs", multiple=True, required=True, help="HOST:PORT to accept links on.")
+def _run_exclusive(ctx: click.Context, main) -> None:
+    """Run the async MAIN(node) as this store's one node service.
+
+    If another service holds the lock, do nothing and succeed: this is what makes it safe
+    for cron or systemd to start one over and over.
+    """
+    with lock.single_instance(lock.lock_path(ctx.obj.db)) as owner:
+        if not owner:
+            if sys.stderr.isatty():
+                click.echo("messnet: a node service is already running for this store; nothing to do", err=True)
+            return
+        try:
+            _run_async(main(_node(ctx)))
+        except ValueError as err:
+            raise click.ClickException(str(err)) from err
+
+
+@cli.command(context_settings=CONTEXT)
+@click.option("-l", "--listen", "addrs", multiple=True,
+              help="HOST:PORT to also accept tcp links on (repeatable); without it, serve what the config says.")
 @_scope_opt
 @click.pass_context
 def serve(ctx, addrs, scope):
-    """Accept TCP links (and keep spool/state maintained)."""
-    node = _node(ctx)
+    """Run the node service: keep spool and state current, and serve links.
 
-    async def main():
+    Without -l this is the full service from the config (listeners, links, peers), the same
+    as 'run'.  With -l it listens on just those addresses.  Only one runs per store; starting
+    another does nothing, so it is safe to start from cron or systemd (see 'install').
+    """
+    if not addrs:
+        _run_exclusive(ctx, daemon.run)
+        return
+
+    async def main(node):
         servers = [await serve_tcp(node, a, scope) for a in addrs]
         try:
             await daemon.maintain(node)
@@ -218,7 +245,7 @@ def serve(ctx, addrs, scope):
             for s in servers:
                 s.close()
 
-    _run_async(main())
+    _run_exclusive(ctx, main)
 
 
 @cli.group(context_settings=CONTEXT, no_args_is_help=True)
@@ -314,11 +341,8 @@ def id_cmd(ctx):
 @cli.command(context_settings=CONTEXT)
 @click.pass_context
 def run(ctx):
-    """Run the node daemon: maintenance plus configured listeners and links."""
-    try:
-        _run_async(daemon.run(_node(ctx)))
-    except ValueError as err:
-        raise click.ClickException(str(err)) from err
+    """Run the node daemon: maintenance plus configured listeners and links (like 'serve')."""
+    _run_exclusive(ctx, daemon.run)
 
 
 @cli.command(context_settings=CONTEXT)
@@ -476,6 +500,61 @@ def validate(ctx, types, origin, since):
             click.echo(f"{ev['origin']}/{ev.get('scope', 'all')}/{ev['seq']} {ev['type']}: " + "; ".join(problems))
     click.echo(f"{len(results)} events checked, {bad} invalid", err=True)
     ctx.exit(1 if bad else 0)
+
+
+def _install_error(err: install.InstallError) -> click.ClickException:
+    return click.ClickException(str(err))
+
+
+@cli.command("install", context_settings=CONTEXT, no_args_is_help=True)
+@click.argument("target", type=click.Choice(install.TARGETS), required=False)
+@click.option("--list", "list_", is_flag=True, help="List existing installations and what they contain.")
+@click.option("--interval", type=click.IntRange(1, 59), default=install.DEFAULT_INTERVAL, show_default=True,
+              help="cron: minutes between checks that the service is running.")
+@click.option("--exe", type=click.Path(dir_okay=False), help="The messnet executable to run (default: this one).")
+@click.pass_context
+def install_cmd(ctx, target, list_, interval, exe):
+    """Keep 'messnet serve' running: install TARGET (cron or systemd), or --list what is installed.
+
+    \b
+    cron     @reboot and periodic entries in your crontab; work with no login at all.
+    systemd  a user service enabled for boot, plus lingering so it starts before any login.
+
+    Global options given before 'install' (-c, --node, --db, ...) are passed on to the service.
+    Safe to repeat: only what is missing is done.  Undo with 'uninstall'.
+    """
+    if list_ == bool(target):
+        raise click.UsageError("give a TARGET to install, or --list")
+    if list_:
+        found = install.describe(ctx.obj.db)
+        for name, lines in found.items():
+            click.echo(f"{name}: {lines[0]}")
+            for line in lines[1:]:
+                click.echo(line)
+        if not found:
+            click.echo("messnet: nothing installed", err=True)
+        return
+    try:
+        service = install.Service(install.resolve_exe(exe), install.global_args(**ctx.meta["global_opts"]))
+        outcome = install.install(target, service, interval, serving=lock.running_pid(lock.lock_path(ctx.obj.db)) is not None)
+    except install.InstallError as err:
+        raise _install_error(err) from err
+    for note in outcome.notes:
+        click.echo(f"{target}: {note}")
+    for warning in outcome.warnings:
+        click.echo(f"warning: {warning}", err=True)
+
+
+@cli.command("uninstall", context_settings=CONTEXT, no_args_is_help=True)
+@click.argument("target", type=click.Choice(install.TARGETS))
+def uninstall_cmd(target):
+    """Undo 'install TARGET'.  Succeeds, doing nothing, if it is not installed."""
+    try:
+        outcome = install.uninstall(target)
+    except install.InstallError as err:
+        raise _install_error(err) from err
+    for note in outcome.notes:
+        click.echo(f"{target}: {note}")
 
 
 cli.add_command(config_grp)

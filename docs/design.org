@@ -116,6 +116,140 @@ through the shared spool.  Duplicates are dropped by =(origin, scope, seq)=.
 - Consumers read the store (=messnet tail=) or the per-key latest-state
   files (=~/.cache/messnet/state/…=).
 
+* Storage: spool, store and state
+
+A node keeps three kinds of files.  They are three stages of one
+pipeline: a /log/, an /index/ over the log, and a /projection/ of the
+index.
+
+| | spool | store | state |
+|-|-|-|-|
+| what | append-only JSONL, one file per origin per day | SQLite index of every event the node knows | newest event per =(type, origin, subject)=, one JSON file each |
+| written by | the node, for its /own/ events only | =emit=, spool ingest, events received over links | the maintenance loop, from the store |
+| read by | ingest; Syncthing | =tail=, replication, =vv=, =gaps=, the state builder | prompts and panels, with no messnet process |
+| shared between hosts | the =all= spool, if it is a Syncthing folder | never | never |
+| default place | =$XDG_DATA_HOME/messnet/spool= (and an unsynced =local_spool= under =$XDG_STATE_HOME=) | =$XDG_DATA_HOME/messnet/messnet.db= | =$XDG_CACHE_HOME/messnet/state= |
+| lose it, and... | your own history is gone | rebuilt from the spools (see below) | rebuilt from the store |
+
+** Spool: the durable record
+
+- =all= events go to =<spool>/<origin>/<date>.jsonl=.  A node writes only
+  its own origin directory, so Syncthing can share the folder with no write
+  conflicts; this is a second way events travel, beside live links.
+- =lan= and =host= events go to the unsynced =local_spool/{lan,host}=, so
+  those scopes cannot leak through Syncthing.
+- It holds the node's own events (all three scopes) and, in a shared
+  folder, other nodes' =all= events as Syncthing delivers them.
+- It also guards sequence numbers: =emit= allocates
+  =max(store, spool) + 1=, so losing the database cannot reuse a =seq=.
+
+** Store: the node's working knowledge
+
+- Everything the node has: its own events, spool files ingested from
+  other nodes, and events received over links.  =(origin, scope, seq)= is
+  the key, so the same event arriving two ways is kept once.
+- It answers version vectors, queries and replay, and the live-push
+  pollers watch its rowid.  It also holds bookkeeping: spool file offsets,
+  the state cursor and the prune /floors/.
+- Writers (the =emit= command, the daemon) coordinate through
+  =BEGIN IMMEDIATE= transactions.
+
+*Events received over links go to the store and nowhere else.*  The
+spool is where a node records /its own/ events; relaying other nodes'
+events into it would make a node write another origin's directory and
+break the Syncthing guarantee.  The consequence is that the store is a
+cache only for what also reached a spool.  Events that arrived only over
+a link (another node's =lan= events, or its =all= events on a host
+without Syncthing) are gone if the store is rebuilt; =messnet rebuild=
+moves the old database aside, and peers resend what they still have when
+the nodes next link.  A rebuild also forgets the prune floors, so events
+pruned from the store but still present in a spool come back (=prune
+--spool= deletes this node's own spool files).
+
+** State: a projection for readers that should not need messnet
+
+- One small file per key, =<state>/<type>/<origin>/<subject>.json=,
+  holding the whole newest event.  Covers every origin and scope the node
+  knows, so a prompt can show another host's backups.
+- It exists so consumers need no SQLite and keep working offline.
+  Disposable: =messnet state update --rebuild= recreates it.
+- Pruning leaves it alone, so a status can outlive the events that made
+  it.  It keeps no history; for that use =messnet tail= (store) or the
+  spool.
+
+*State files are only as fresh as the last maintenance pass.*  Receiving
+an event updates the store at once, but the state file changes when the
+maintenance loop next runs (ingest the spools, then write state for new
+rows).  Running =messnet serve= (or =run=) keeps that loop going, so a
+host that wants its prompt to follow events arriving from elsewhere
+should run it; see the next section.  =messnet state update= does one
+pass by hand.
+
+* Keeping a node running
+
+A node that is not running neither receives events from its links nor
+refreshes its state files.  =messnet install TARGET= arranges for
+=messnet serve= to be running, and for it to start again after a crash or
+a reboot:
+
+#+begin_example
+messnet install cron         # crontab entries
+messnet install systemd      # a user service (+ lingering)
+messnet install --list       # what is installed, and whether serve is running
+messnet uninstall cron       # undo; not installed is a successful no-op
+#+end_example
+
+=messnet serve= with no =-l= is the whole node service (what =run= does:
+maintenance, configured listeners, links, peer manager); with =-l= it
+listens on just those addresses.
+
+** One instance, so starting is always safe
+
+=serve= and =run= take an exclusive =flock= on =<db>.serve.lock= (next to
+the store, so it means "one service per store").  A second start finds the
+lock held, does nothing and exits successfully.  The kernel drops the lock
+when its holder dies, so a crash or reboot leaves nothing stale.  That is
+what makes both mechanisms below idempotent at run time: cron may start it
+every few minutes, systemd and cron may both be installed, and a person may
+type =messnet serve= at any time.
+
+** Idempotent installation
+
+Each step checks what is already in place and does only what is missing, so
+=install= can be rerun freely and a second run changes nothing.
+
+- *cron* adds one marker-delimited block to the user's crontab: an
+  =@reboot= line (cron runs it at boot with no login at all) and a
+  periodic line (default every 10 minutes, =--interval=) that restarts
+  the service if it died.  Everything else in the crontab is left alone,
+  the block is replaced in place if it differs, and removing it restores
+  the crontab as it was.  The lines carry a fixed =PATH= and absolute paths
+  because cron has almost no environment.
+- *systemd* writes =~/.config/systemd/user/messnet.service= (=Restart=on-failure=,
+  =WantedBy=default.target=), runs =daemon-reload= only if the file
+  changed, =enable= only if not enabled, =start= only if not running (and
+  =restart= if the file changed under a running service), and enables
+  /lingering/.  Without lingering the user's service manager starts at
+  first login; with it, at boot.  A login by any route (graphical, console,
+  ssh) is then irrelevant, and not logging in for days is fine.  If lingering
+  cannot be enabled (it can need =sudo loginctl enable-linger USER=), install
+  says so; the unit still works from the first login, and =install cron=
+  covers the gap.  A =messnet.service= that was not made by =install= is
+  never overwritten or removed.
+- Both targets run =messnet serve= with the global options given before
+  =install= (=-c=, =--node=, =--db=, ...; =$MESSNET_CONFIG= counts as =-c=)
+  and with the absolute path of the executable (=--exe= to override), since
+  neither has the environment of your shell.
+
+** Limits
+
+- Per user only; no system-wide units or root crontab.
+- =uninstall systemd= leaves lingering on (other services may rely on it).
+- The service needs =ssh=, =gonc= and so on on its =PATH=.  Under systemd
+  that is the user manager's =PATH= (see =systemctl --user show-environment=);
+  under cron it is =~/.local/bin:/usr/local/bin:/usr/bin:/bin=.  Setting
+  =gonc_bin= to an absolute path avoids the question.
+
 * Security
 
 ** Trust model in one paragraph

@@ -354,23 +354,19 @@ failure, and re-plans when the network or the peer files change.
 
 * Keeping it running
 
-A systemd user unit for the daemon, on each host:
+On each host, let messnet arrange for its own service to run:
 #+begin_example
-# ~/.config/systemd/user/messnet.service
-[Unit]
-Description=messnet node
-
-[Service]
-ExecStart=%h/.local/bin/messnet run
-Restart=on-failure
-
-[Install]
-WantedBy=default.target
+messnet install systemd      # a user service, started at boot (needs lingering)
+messnet install cron         # or/and: crontab entries, which also work at boot
+messnet install --list       # what is installed, and whether it is running
 #+end_example
-#+begin_example
-systemctl --user daemon-reload && systemctl --user enable --now messnet
-journalctl --user -u messnet -f
-#+end_example
+Run it as many times as you like; it only does what is missing.  Both
+entries run =messnet serve=, which is the whole node (listeners, links,
+peers, spool and state upkeep) and starts only one copy per store, so having
+both installed is fine.  Pass global options first, e.g. =messnet -c
+~/mynet.toml install systemd=.  Undo with =messnet uninstall systemd= /
+=cron=; uninstalling what is not installed does nothing.  See [[file:design.org]]
+for how it works.  Logs under systemd: =journalctl --user -u messnet -f=.
 
 * Troubleshooting
 
