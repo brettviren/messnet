@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import signal
+import sqlite3
 import sys
 
 import click
@@ -22,7 +23,10 @@ CONTEXT = {"help_option_names": ["-h", "--help"]}
 
 
 def _node(ctx: click.Context) -> Node:
-    node = Node(ctx.obj)
+    try:
+        node = Node(ctx.obj)
+    except (OSError, sqlite3.Error) as err:
+        raise click.ClickException(f"cannot open the event store {ctx.obj.db}: {err}") from err
     ctx.call_on_close(node.close)
     return node
 
@@ -115,6 +119,8 @@ def emit(ctx, type, assignments, subject, scope, producer, source, data_json, fr
                                 source=source or default_source(producer))]
     except (EventError, json.JSONDecodeError) as err:
         raise click.ClickException(str(err)) from err
+    except (OSError, sqlite3.Error) as err:      # spool or store not writable
+        raise click.ClickException(f"cannot record the event: {err}") from err
     if echo:
         _echo_events(events, "json")
 

@@ -32,3 +32,24 @@ def test_emit_tail_state(tmp_path):
     got = json.loads(run(tmp_path, "state", "get", "backup.*"))
     assert got["subject"] == "push"
     assert run(tmp_path, "vv").strip() == "t/all 2"
+
+
+def test_unusable_store_is_a_clean_error(tmp_path):
+    """An unwritable store or spool gives a one-line error, not a traceback."""
+    blocker = tmp_path / "file"
+    blocker.write_text("not a directory")
+    for args in (("tail", "-t", "*"), ("emit", "x.y.v1")):
+        env = {"MESSNET_NODE": "t", "MESSNET_SPOOL": str(tmp_path / "spool"),
+               "MESSNET_LOCAL_SPOOL": str(tmp_path / "local"), "MESSNET_STATE": str(tmp_path / "state"),
+               "MESSNET_ETC": str(tmp_path / "etc"), "MESSNET_CONFIG": "",
+               "XDG_CONFIG_HOME": str(tmp_path / "cfg"), "MESSNET_DB": str(blocker / "db")}
+        res = CliRunner().invoke(cli, list(args), env=env, catch_exceptions=False)
+        assert res.exit_code == 1
+        assert res.output.startswith("Error: cannot open the event store") and str(blocker) in res.output
+
+    # Store fine, spool unusable: emit reports it.
+    env = {"MESSNET_NODE": "t", "MESSNET_SPOOL": str(blocker / "spool"), "MESSNET_LOCAL_SPOOL": str(tmp_path / "local"),
+           "MESSNET_DB": str(tmp_path / "db"), "MESSNET_STATE": str(tmp_path / "state"),
+           "MESSNET_ETC": str(tmp_path / "etc"), "MESSNET_CONFIG": "", "XDG_CONFIG_HOME": str(tmp_path / "cfg")}
+    res = CliRunner().invoke(cli, ["emit", "x.y.v1"], env=env, catch_exceptions=False)
+    assert res.exit_code == 1 and res.output.startswith("Error: cannot record the event")
