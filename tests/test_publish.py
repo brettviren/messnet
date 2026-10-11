@@ -47,6 +47,16 @@ def test_default_socket_does_not_depend_on_the_runtime_dir(monkeypatch, tmp_path
     assert publish.default_socket() == under_cron == tmp_path / "cache" / "messnet" / "events.sock"
 
 
+def test_long_socket_paths(monkeypatch, tmp_path):
+    deep = tmp_path / ("d" * 60) / ("e" * 60)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(deep))
+    fallback = publish.default_socket()                                   # the default copes with a deep home...
+    assert fallback == Path(f"/tmp/messnet-{os.getuid()}/events.sock")
+    assert publish.check_publish({"kind": "unix"})["path"] == str(fallback)
+    with pytest.raises(ValueError, match="over the limit"):               # ...an explicit one is told plainly
+        publish.check_publish({"kind": "unix", "path": str(deep / "events.sock")})
+
+
 def test_check_publish():
     assert publish.check_publish({"kind": "unix", "path": "/x/s"}) == {"kind": "unix", "path": "/x/s", "scope": "host"}
     assert publish.check_publish({"kind": "tcp", "addr": "127.0.0.1:9"}) == {"kind": "tcp", "addr": "127.0.0.1:9", "scope": "all"}

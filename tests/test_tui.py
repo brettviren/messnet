@@ -127,7 +127,8 @@ def test_latest_pane_follows_arrivals(tmp_path):
         app = app_for(tmp_path)
         async with app.run_test(size=(130, 40)) as pilot:
             await pilot.pause(0.2)
-            assert "alpha messnet.link.v1" in app.latest_text                  # newest known, to begin with
+            await until(pilot, lambda: app.feed == "state")
+            assert "alpha demo.thing.v1" in app.latest_text                    # the file written last, to begin with
             app.arrived(ev("restic.commit.v1", "zed", "run", "2026-10-11T12:30:00+00:00",
                            {"result": "partial", "method": "backup", "repository": "/r", "location": "local",
                             "paths": ["/h"], "snapshot_id": "cd" * 32, "error": "x", "error_count": 3,
@@ -169,6 +170,7 @@ def test_live_events_through_the_concentrator(make_node, tmp_path, sockdir):
 def test_without_a_node_the_latest_file_is_watched(tmp_path):
     make_state(tmp_path)
     latest = tmp_path / "latest.json"
+    latest.write_text(json.dumps(ev("older.v1", "alpha", None, "2026-10-11T12:00:00+00:00", {"v": 0})))
 
     async def main():
         app = app_for(tmp_path, target=None, latest_path=latest)
@@ -176,6 +178,68 @@ def test_without_a_node_the_latest_file_is_watched(tmp_path):
             await until(pilot, lambda: app.live.startswith("polling latest.json"))
             latest.write_text(json.dumps(ev("watched.v1", "alpha", None, "2026-10-11T12:31:00+00:00", {"v": 1})))
             await until(pilot, lambda: "watched.v1" in app.latest_text, timeout=5)
+            assert app.feed == "file" and "latest.json" in app.query_one("#latest").border_title
+
+    run(main())
+
+
+def test_no_live_source_follows_the_most_recently_changed_state_file(tmp_path, sockdir):
+    """A node that predates the publisher (or is not running): nothing reports arrivals, yet the
+    latest-event pane must not freeze; it follows whichever state file changed last."""
+    make_state(tmp_path)
+
+    async def main():
+        # a socket path with nothing listening, and no latest file: exactly what an old daemon leaves
+        app = app_for(tmp_path, target=f"unix:{sockdir / 'none.sock'}", latest_path=tmp_path / "latest.json")
+        async with app.run_test(size=(130, 40)) as pilot:
+            await until(pilot, lambda: app.feed == "state")
+            assert "newest state file" in app.query_one("#latest").border_title
+            first = app.latest_text
+            assert first
+            put(tmp_path, ev("restic.commit.v1", "gamma", "run", "2026-10-11T11:00:00+00:00",     # an old event time...
+                             {"result": "ok", "method": "backup", "repository": "/r", "location": "local",
+                              "paths": ["/h"], "snapshot_id": "ef" * 32, "total_files_processed": 1,
+                              "total_bytes_processed": 2}))                                          # ...but it just arrived
+            await until(pilot, lambda: "gamma restic.commit.v1" in app.latest_text)
+            put(tmp_path, ev("demo.thing.v1", "alpha", None, "2026-10-11T10:00:00+00:00", {"n": 555}))
+            await pilot.press("r")                                       # refresh gives the same answer
+            await until(pilot, lambda: "alpha demo.thing.v1" in app.latest_text and "n=555" in app.latest_text)
+
+    run(main())
+
+
+def test_state_only_mode_with_no_target_or_file(tmp_path):
+    make_state(tmp_path)
+
+    async def main():
+        app = app_for(tmp_path, target=None, latest_path=None)
+        async with app.run_test(size=(130, 40)) as pilot:
+            await until(pilot, lambda: app.feed == "state")
+            put(tmp_path, ev("late.v1", "beta", None, "2026-10-01T00:00:00+00:00", {"v": 1}))
+            await until(pilot, lambda: "beta late.v1" in app.latest_text)
+
+    run(main())
+
+
+def test_title_says_when_the_feed_is_live(make_node, tmp_path, sockdir):
+    node = make_node("alpha")
+    make_state(tmp_path)
+    spec = publish.check_publish({"kind": "unix", "path": str(sockdir / "e.sock")})
+
+    async def main():
+        server = await publish.serve(node, spec)
+        try:
+            app = app_for(tmp_path, target=f"unix:{spec['path']}")
+            async with app.run_test(size=(130, 40)) as pilot:
+                await until(pilot, lambda: app.feed == "publisher")
+                assert app.query_one("#latest").border_title == "Latest event · live"
+                shown = app.latest_text
+                put(tmp_path, ev("later.v1", "beta", None, "2026-10-12T00:00:00+00:00", {"v": 1}))   # state changes...
+                await pilot.pause(0.5)
+                assert app.latest_text == shown            # ...do not override what the live feed says
+        finally:
+            server.close()
+            server.cleanup()
 
     run(main())
 
@@ -189,7 +253,7 @@ def test_unreachable_node_falls_back_to_the_file(tmp_path, sockdir):
         app = app_for(tmp_path, target=f"unix:{sockdir / 'none.sock'}", latest_path=latest)
         async with app.run_test(size=(130, 40)) as pilot:
             await until(pilot, lambda: app.live.startswith("polling latest.json"))
-            assert "fromfile.v1" in app.latest_text
+            assert "fromfile.v1" in app.latest_text and app.feed == "file"
 
     run(main())
 

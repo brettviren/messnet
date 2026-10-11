@@ -42,6 +42,7 @@ log = logging.getLogger(__name__)
 PROTO = 1
 SCOPES = ("all", "lan", "host")          # narrowest first
 VISIBLE = {"all": ("all",), "lan": ("lan", "all"), "host": ("host", "lan", "all")}
+SOCKET_LIMIT = 107                       # bytes of a unix socket path (sun_path is 108, with its NUL)
 PING = 30.0
 SUBSCRIBE_WAIT = 2.0
 
@@ -53,7 +54,10 @@ def default_socket() -> Path:
     and a client run from a shell would look in different places.  The cache directory is the
     same for both (and is where the log and the ``latest`` file live too).
     """
-    return Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "messnet" / "events.sock"
+    path = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "messnet" / "events.sock"
+    if len(os.fsencode(path)) > SOCKET_LIMIT - 7:        # an unusually deep home: use a short fixed place
+        return Path(f"/tmp/messnet-{os.getuid()}/events.sock")
+    return path
 
 
 def check_publish(spec: dict) -> dict:
@@ -61,6 +65,9 @@ def check_publish(spec: dict) -> dict:
     kind = spec.get("kind")
     if kind == "unix":
         out = {"kind": "unix", "path": str(Path(spec.get("path") or default_socket()).expanduser())}
+        if len(os.fsencode(out["path"])) > SOCKET_LIMIT:
+            raise ValueError(f"the unix socket path is {len(os.fsencode(out['path']))} bytes, over the limit of "
+                             f"{SOCKET_LIMIT}; give the publish entry a shorter 'path': {out['path']}")
     elif kind == "tcp":
         if "addr" not in spec:
             raise ValueError(f"a tcp publish entry needs 'addr': {spec}")
@@ -178,6 +185,8 @@ async def serve(node: Node, spec: dict) -> asyncio.Server:
     if spec["kind"] == "unix":
         path = Path(spec["path"])
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if path.parent.stat().st_uid != os.getuid():       # e.g. someone else made /tmp/messnet-UID first
+            raise OSError(f"{path.parent} is not owned by you; not putting the event socket there")
         await _clear_stale_socket(path)
         old = os.umask(0o177)                     # the socket is born private
         try:

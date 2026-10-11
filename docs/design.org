@@ -419,7 +419,10 @@ publish = [
 #+end_src
 
 Entries may be added, changed and removed while =serve= runs (see [[*Following
-configuration changes]]); =publish = []= publishes nowhere.
+configuration changes]]); =publish = []= publishes nowhere.  A unix socket path is
+limited to 107 bytes by the operating system: an explicit =path= that is longer is
+rejected with a message, and the default (which is =~/.cache/messnet/events.sock=)
+falls back to =/tmp/messnet-UID/events.sock= if your cache directory is that deep.
 
 *Protocol.*  JSON lines in both directions, like the replication protocol
 (=docs/events.org= describes the events themselves):
@@ -511,9 +514,14 @@ event-type view, =Tab= next pane, arrows to select, =r= refresh, =q= quit.
 Where the data comes from: the lists and detail come from the state files,
 checked every 1.5 s and redrawn when one changes, with your selection kept.  The
 bottom pane follows the node's publisher (the header says =live: connected to
-unix:...=); if no node is publishing it watches the =latest= file instead, and
-with neither it still follows the state files.  =--no-live= forces the last
-mode; =--connect= follows another node's publisher.
+unix:...= and the pane's title =Latest event · live=).  If no node is publishing
+it watches the =latest= file (title: =from the latest.json file=).  With neither
+it shows the event in the state file that changed last, which is when this node
+stored it, so it still follows what arrives (title: =newest state file (no live
+feed ...)=).  The title always says which of the three you are looking at, so a
+pane that is not live is never mistaken for one.  A daemon that predates the
+publisher, or is not running, is the usual reason for the last two.  =--no-live=
+forces the last mode; =--connect= follows another node's publisher.
 
 A host's dot reflects the health of what it reports (the worst outcome among
 its events: red failed, yellow partial or unknown, green ok), not its links:

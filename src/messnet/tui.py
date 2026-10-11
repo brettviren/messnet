@@ -110,6 +110,7 @@ class MessnetTui(App[None]):
         self.event_key: str | None = None
         self.latest: dict | None = None
         self.live = "starting"
+        self.feed = "starting"            # where 'latest' comes from: publisher | file | state
         self.detail_text = ""             # the detail and latest panes as plain text, for tests
         self.latest_text = ""
         self._sig: tuple | None = None
@@ -129,7 +130,7 @@ class MessnetTui(App[None]):
         yield Footer()
 
     def on_mount(self) -> None:
-        self.query_one("#latest").border_title = "Latest event"
+        self.query_one("#latest").border_title = self.TITLES["starting"]
         self.query_one("#detail-box").border_title = "Event"
         self._set_columns()
         self.reload(force=True)
@@ -161,7 +162,13 @@ class MessnetTui(App[None]):
         self._sig = sig
         self.events = tuimodel.load(self.state_root)
         self.by_key = {tuimodel.event_key(e): e for e in self.events}
-        if self.latest is None:
+        if self.feed == "state":
+            # nothing reports arrivals, so the latest event is the one in the file changed last
+            ev = tuimodel.latest_arrival(self.state_root)
+            if ev and ev.get("id") != (self.latest or {}).get("id"):
+                self.latest = ev
+                self._show_latest()
+        elif self.latest is None:
             self.latest = self._initial_latest()
             self._show_latest()
         self.redraw()
@@ -264,9 +271,19 @@ class MessnetTui(App[None]):
         self._reload_timer = None
         self.reload()
 
-    def _status(self, text: str) -> None:
-        self.live = text
+    TITLES = {"publisher": "Latest event · live",
+              "file": "Latest event · from the latest.json file",
+              "state": "Latest event · newest state file (no live feed: is 'messnet serve' running, and recent?)",
+              "starting": "Latest event"}
+
+    def _status(self, text: str, feed: str) -> None:
+        """Say where live information is coming from (TEXT, for the header) and use FEED for 'latest'."""
+        self.live, self.feed = text, feed
         self.sub_title = f"live: {text}"
+        with contextlib.suppress(NoMatches):
+            self.query_one("#latest").border_title = self.TITLES[feed]
+        if feed == "state":
+            self.reload(force=True)
 
     async def _follow(self) -> None:
         """Take live events from the concentrator; when it is not there, watch the latest file."""
@@ -275,15 +292,15 @@ class MessnetTui(App[None]):
             if self.target:
                 try:
                     async for ev in subscribe.subscribe(
-                            self.target, replay=1, on_hello=lambda hello: self._status(f"connected to {self.target}")):
+                            self.target, replay=1, on_hello=lambda hello: self._status(f"connected to {self.target}", "publisher")):
                         seen = ev.get("id")
                         self.arrived(ev)
                 except subscribe.SubscribeError:
                     pass
                 except (OSError, ValueError):
                     pass
-            if self.latest_path:
-                self._status(f"polling {self.latest_path.name} (no node publishing)")
+            if self.latest_path and self.latest_path.exists():
+                self._status(f"polling {self.latest_path.name} (no node publishing)", "file")
                 for _ in range(5):                  # then try the concentrator again
                     ev = subscribe.read_latest(self.latest_path)
                     if ev and ev.get("id") != seen:
@@ -291,8 +308,8 @@ class MessnetTui(App[None]):
                         self.arrived(ev)
                     await asyncio.sleep(1.0)
             else:
-                self._status("off (state files only)")
-                await asyncio.sleep(5.0)
+                self._status("none (following the state files only)", "state")
+                await asyncio.sleep(2.0)
 
     # ---- interaction ----------------------------------------------------------------------------------
 

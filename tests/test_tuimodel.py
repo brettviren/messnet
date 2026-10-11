@@ -73,6 +73,16 @@ def test_rows(tmp_path):
     assert tuimodel.rows(events, "hosts", "nobody", NOW) == []
 
 
+def test_latest_arrival_is_the_last_file_changed_not_the_newest_event_time(tmp_path):
+    make_state(tmp_path)
+    assert tuimodel.latest_arrival(tmp_path / "nowhere") is None
+    # an event stamped long ago, but stored just now
+    put(tmp_path, ev("demo.thing.v1", "alpha", None, "2001-01-01T00:00:00+00:00", {"n": 9}))
+    got = tuimodel.latest_arrival(tmp_path)
+    assert got["type"] == "demo.thing.v1" and got["data"] == {"n": 9}
+    assert tuimodel.newest(tuimodel.load(tmp_path))["type"] != "demo.thing.v1"       # by event time it is the oldest
+
+
 def test_signature_changes_with_the_state(tmp_path):
     make_state(tmp_path)
     first = tuimodel.signature(tmp_path)

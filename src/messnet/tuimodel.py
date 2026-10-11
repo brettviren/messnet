@@ -73,6 +73,20 @@ def load(root: Path) -> list[dict]:
     return out
 
 
+def latest_arrival(root: Path) -> dict | None:
+    """The event in the most recently changed state file: the best guess at 'what came in last'
+    when nothing is reporting arrivals.  (Event times are the origin's clocks; a file's time of
+    change is when this node stored it.)"""
+    newest = max(signature(root), key=lambda s: s[3], default=None)
+    if newest is None:
+        return None
+    try:
+        ev = json.loads((Path(root) / newest[0] / newest[1] / newest[2]).read_text())
+    except (OSError, ValueError):
+        return None
+    return ev if isinstance(ev, dict) and ev.get("type") and ev.get("origin") else None
+
+
 def event_key(ev: dict) -> str:
     return f"{ev['type']}\x1f{ev['origin']}\x1f{ev.get('subject') or ''}"
 
