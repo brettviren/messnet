@@ -54,10 +54,10 @@ def publish_config(cfg) -> bool:
     return peers.publish_peer(cfg.etc, peers.peer_record(cfg.node, advertise, {"id": nid}))
 
 
-async def run(node: Node) -> None:
-    """Run the node service (see ``service``) until cancelled."""
+async def run(node: Node, ready=None) -> None:
+    """Run the node service (see ``service``) until cancelled; READY() is called once it is up."""
     from messnet.service import Service      # imported late: service builds on this module
-    await Service(node, configure_log=True).run()
+    await Service(node, configure_log=True).run(ready)
 
 
 async def run_stdio(node: Node, scope: str = "all", maintained: bool = True) -> None:

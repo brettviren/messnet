@@ -151,7 +151,7 @@ def test_default_exe(monkeypatch, tmp_path, exe):
 
 def test_unit_quoting():
     unit = install.render_unit(install.Service("/opt/a b/messnet", ("--node", "50%$x")))
-    assert 'ExecStart="/opt/a b/messnet" --node 50%%$$x serve\n' in unit
+    assert 'ExecStart="/opt/a b/messnet" --node 50%%$$x serve --foreground\n' in unit
     assert unit.startswith(install.UNIT_MARK) and "WantedBy=default.target" in unit
 
 
@@ -218,7 +218,7 @@ def test_systemd_install_is_idempotent(tmp_path, fake, exe):
     for word in ("wrote", "enabled messnet.service", "started", "enabled lingering"):
         assert word in out
     text = unit_file(tmp_path).read_text()
-    assert f"ExecStart={exe} serve\n" in text and "WantedBy=default.target" in text
+    assert f"ExecStart={exe} serve --foreground\n" in text and "WantedBy=default.target" in text
     assert "systemctl daemon-reload" in fake.calls()
     assert "systemctl enable messnet.service" in fake.calls()
     assert "systemctl start messnet.service" in fake.calls()
@@ -250,11 +250,21 @@ def test_systemd_lingering_denied_warns_but_installs(tmp_path, fake, exe):
     assert len(fake.calls("loginctl enable-linger")) == 2
 
 
+HOLD_LOCK = """
+import sys, time
+from pathlib import Path
+from messnet import lock
+with lock.single_instance(Path(sys.argv[1])) as owner:
+    print(owner, flush=True)
+    time.sleep(60)
+"""
+
+
 def test_systemd_does_not_start_when_a_service_is_already_running(tmp_path, fake, exe):
-    holder = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", "messnet"])
+    lock_file = lock.lock_path(tmp_path / "db")
+    holder = subprocess.Popen([sys.executable, "-c", HOLD_LOCK, str(lock_file)], stdout=subprocess.PIPE, text=True)
     try:
-        lock_file = lock.lock_path(tmp_path / "db")
-        lock_file.write_text(f"{holder.pid}\n")
+        assert holder.stdout.readline().strip() == "True"           # it holds the lock for real
         out = run(tmp_path, "install", "systemd", "--exe", exe)
         assert "already running" in out and "start messnet.service" not in "\n".join(fake.calls())
         listing = run(tmp_path, "install", "--list")
@@ -296,7 +306,7 @@ def test_list(tmp_path, fake, exe):
     out = run(tmp_path, "install", "--list")
     assert "cron: crontab entries:" in out and "  @reboot PATH=" in out and "  */10 * * * * PATH=" in out
     assert f"systemd: unit file: {unit_file(tmp_path)}" in out
-    assert f"ExecStart={exe} serve" in out and "enabled, active" in out and "lingering: yes" in out
+    assert f"ExecStart={exe} serve --foreground" in out and "enabled, active" in out and "lingering: yes" in out
     run(tmp_path, "uninstall", "cron")
     assert "cron:" not in run(tmp_path, "install", "--list")
 

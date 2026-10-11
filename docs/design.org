@@ -199,19 +199,50 @@ messnet install --list       # what is installed, and whether serve is running
 messnet uninstall cron       # undo; not installed is a successful no-op
 #+end_example
 
-=messnet serve= with no =-l= is the whole node service (what =run= does:
-maintenance, configured listeners, links, peer manager); with =-l= it
-listens on just those addresses.
+** The daemon: =messnet serve=
+
+=messnet serve= starts the node service as a background daemon and returns.
+With no =-l= it is the whole service (maintenance, configured listeners,
+links, peer manager); with =-l= it listens on just those addresses.
+
+#+begin_example
+messnet serve        # start the daemon; nothing to do if one is running
+messnet serve -k     # stop it (SIGTERM, then SIGKILL if it will not go)
+messnet serve -d     # foreground, everything logged to the screen, no log file (debugging)
+messnet serve -f     # foreground, logging as the daemon does (what systemd runs)
+messnet run          # same as serve -f
+#+end_example
+
+Why a daemon: a foreground process started by cron stays attached to cron
+for good, with its output pipes held open (cron mails whatever collects in
+them when the job finally ends), shows up as a long-running cron job, and
+blocks a terminal when run by hand.  The daemon forks twice, detaches from
+the terminal and session, and points its standard streams at =/dev/null=
+(everything it has to say goes to the log; see below).  It keeps its working
+directory, because configuration paths may be relative.
+
+The command waits for the daemon to say it is really up (listeners opened,
+upkeep started), so its exit status is honest: 0 if the daemon started or was
+already running, 1 with the reason on stderr if it could not start (bad
+configuration, unusable store).  It prints a line only when run from a
+terminal; from cron it is silent on success, so there is no mail.
+
+=-k= finds the daemon through the kernel's lock table, not a pid file that
+could be stale or reused, so it can only ever signal the process that holds the
+lock.  It also stops a service started with =-f=, =-d= or =run=.  Under
+systemd use =systemctl --user stop messnet=; =-k= works but systemd sees a
+clean exit, and the unit stays stopped until you start it.
 
 ** One instance, so starting is always safe
 
 =serve= and =run= take an exclusive =flock= on =<db>.serve.lock= (next to
 the store, so it means "one service per store").  A second start finds the
-lock held, does nothing and exits successfully.  The kernel drops the lock
-when its holder dies, so a crash or reboot leaves nothing stale.  That is
-what makes both mechanisms below idempotent at run time: cron may start it
-every few minutes, systemd and cron may both be installed, and a person may
-type =messnet serve= at any time.
+lock held, does nothing and exits successfully (=-d= says so and fails, since a
+person is watching).  The kernel drops the lock when its holder dies, so a
+crash, =kill -9= or reboot leaves nothing stale.  That is what makes both
+mechanisms below idempotent at run time: cron may start it every few minutes,
+systemd and cron may both be installed, and a person may type =messnet serve=
+at any time.
 
 ** Idempotent installation
 
@@ -221,11 +252,15 @@ Each step checks what is already in place and does only what is missing, so
 - *cron* adds one marker-delimited block to the user's crontab: an
   =@reboot= line (cron runs it at boot with no login at all) and a
   periodic line (default every 10 minutes, =--interval=) that restarts
-  the service if it died.  Everything else in the crontab is left alone,
+  the service if it died.  Both run =messnet serve=, which returns at once,
+  so cron never holds a long-running job.  Everything else in the crontab is left alone,
   the block is replaced in place if it differs, and removing it restores
   the crontab as it was.  The lines carry a fixed =PATH= and absolute paths
   because cron has almost no environment.
-- *systemd* writes =~/.config/systemd/user/messnet.service= (=Restart=on-failure=,
+- *systemd* writes =~/.config/systemd/user/messnet.service= running
+  =messnet serve --foreground= (systemd supervises the process it starts; a
+  command that forked away would look finished and its daemon would be cleaned
+  up with the unit) with (=Restart=on-failure=,
   =WantedBy=default.target=), runs =daemon-reload= only if the file
   changed, =enable= only if not enabled, =start= only if not running (and
   =restart= if the file changed under a running service), and enables

@@ -49,12 +49,14 @@ uv run messnet state get 'backup.*'
 * Linking nodes
 
 #+begin_example
-messnet serve -l 100.96.203.121:7701 --scope lan     # accept TCP links
+messnet serve -l 100.96.203.121:7701 --scope lan     # daemon accepting just these TCP links
 messnet connect tcp hokum:7701 --scope lan -k        # link, reconnect forever
 messnet connect ssh hokum -k                         # runs 'messnet link --stdio' remotely
 messnet connect cmd -k -- gonc ...                   # any stdio transport
-messnet run                                          # daemon from config.toml
-messnet serve                                        # same; only one runs per store
+messnet serve                                        # start the node daemon (idempotent; one per store)
+messnet serve -k                                     # stop it
+messnet serve -d                                     # foreground, debug logging on the screen
+messnet run                                          # foreground (same as serve -f); the systemd unit runs serve --foreground
 messnet install systemd                              # keep it running: at boot, after crashes
 messnet install cron                                 # ... or via crontab; both are idempotent
 messnet install --list                               # what is installed

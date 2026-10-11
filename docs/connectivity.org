@@ -103,11 +103,13 @@ Replace =ALPHA_IP= with alpha's LAN or Tailscale address.
 
 One-shot:
 #+begin_example
-alpha$ messnet serve -l ALPHA_IP:7701
+alpha$ messnet serve -d -l ALPHA_IP:7701          # in the foreground, logging to the screen
 beta$  messnet -v connect tcp ALPHA_IP:7701
 messnet: INFO linked with alpha (all scope, authenticated)
 beta$  messnet tail -t 'demo.*' --format text     # in another terminal
 #+end_example
+(=serve= without =-d= starts a background daemon instead; stop it with
+=messnet serve -k=.)
 
 Persistent:
 #+begin_example
@@ -133,7 +135,7 @@ Then run =messnet run= on both.  =beta$ messnet links= shows
 Through an ssh tunnel (when only ssh reaches alpha): alpha listens on
 =127.0.0.1:7701=, beta forwards a local port and links to it:
 #+begin_example
-alpha$ messnet serve -l 127.0.0.1:7701
+alpha$ messnet serve -l 127.0.0.1:7701     # a daemon; =messnet serve -k= stops it
 beta$  ssh -N -L 7701:127.0.0.1:7701 alpha &
 beta$  messnet connect tcp 127.0.0.1:7701
 #+end_example

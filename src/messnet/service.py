@@ -302,7 +302,8 @@ class Service:
             await asyncio.wait_for(self._wake.wait(), self.interval)
         self._wake.clear()
 
-    async def run(self) -> None:
+    async def run(self, ready: Callable[[], None] | None = None) -> None:
+        """Run until cancelled.  READY is called once the components have been started."""
         node, cfg = self.node, self.node.cfg
         log.info("service starting: node %s, pid %d, config %s", cfg.node, os.getpid(), cfgmod.source_file(cfg))
         self.desired(cfg)                        # a bad configuration fails here, before anything starts
@@ -313,6 +314,8 @@ class Service:
         try:
             await self.reconcile()
             self.peer_sig = self.signature()
+            if ready:
+                ready()
             while True:
                 await self._nap()
                 await self.check_config()

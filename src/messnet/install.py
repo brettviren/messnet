@@ -12,6 +12,8 @@ Targets (all per user, no root needed):
 Everything here is idempotent: each step first looks at what is already in place and does
 only what is missing.  The entries are too: ``messnet serve`` holds a lock (see ``lock``),
 so a second start is a harmless no-op, and cron or systemd may fire it as often as they like.
+cron runs ``messnet serve``, which starts the daemon and returns; systemd runs
+``messnet serve --foreground``, because it wants to supervise the process it started.
 """
 
 import getpass
@@ -51,9 +53,10 @@ class Service:
     exe: str
     args: tuple[str, ...] = ()
 
-    @property
-    def argv(self) -> list[str]:
-        return [self.exe, *self.args, "serve"]
+    def argv(self, foreground: bool = False) -> list[str]:
+        """``serve`` starts a daemon and returns, which is right for cron; systemd wants the
+        process it started to stay, so its unit asks for ``--foreground``."""
+        return [self.exe, *self.args, "serve", *(["--foreground"] if foreground else [])]
 
 
 def default_exe() -> str:
@@ -108,7 +111,7 @@ def _run(*argv: str, input: str | None = None) -> subprocess.CompletedProcess:
 
 def cron_block(service: Service, interval: int = DEFAULT_INTERVAL) -> list[str]:
     """The lines to keep in the crontab."""
-    command = f"PATH={shlex.quote(search_path(service.exe))} {shlex.join(service.argv)}".replace("%", r"\%")
+    command = f"PATH={shlex.quote(search_path(service.exe))} {shlex.join(service.argv())}".replace("%", r"\%")
     return [f"{BEGIN} (managed by 'messnet install cron'; edits between the markers are overwritten)",
             f"@reboot {command}",
             f"*/{interval} * * * * {command}",
@@ -205,7 +208,7 @@ def render_unit(service: Service) -> str:
             "Description=messnet node: event spool, state and links\n"
             "\n"
             "[Service]\n"
-            f"ExecStart={' '.join(_systemd_quote(a) for a in service.argv)}\n"
+            f"ExecStart={' '.join(_systemd_quote(a) for a in service.argv(foreground=True))}\n"
             "Restart=on-failure\n"
             "RestartSec=10\n"
             "\n"

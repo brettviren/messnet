@@ -1,6 +1,7 @@
 """messnet command line interface (Click commands only; logic lives in library modules)."""
 
 import asyncio
+import contextlib
 import json
 import logging
 import signal
@@ -9,7 +10,7 @@ import sys
 
 import click
 
-from messnet import daemon, install, lock, logsetup, manager, netdetect, peers, state
+from messnet import daemon, daemonize, install, lock, logsetup, manager, netdetect, peers, state
 from messnet.cli_config import config_grp
 from messnet.config import config_file, load_config
 from messnet.event import EventError, default_source, dumps, parse_assignments
@@ -204,49 +205,107 @@ def link(ctx, stdio, maintain, scope):
     _run_async(daemon.run_stdio(_node(ctx), scope, maintain))
 
 
-def _run_exclusive(ctx: click.Context, main) -> None:
-    """Run the async MAIN(node) as this store's one node service.
+def _noop(*_args) -> None:
+    pass
 
-    If another service holds the lock, do nothing and succeed: this is what makes it safe
-    for cron or systemd to start one over and over.
+
+def _run_exclusive(ctx: click.Context, main, report=_noop, screen: bool = False) -> None:
+    """Run the async MAIN(node, ready) as this store's one node service.
+
+    MAIN calls READY() once it is up, which is when REPORT hears "started".  If another
+    service holds the lock there is nothing to do: REPORT hears "running" and we succeed,
+    which is what makes it safe for cron or systemd to start one over and over.  SCREEN (the
+    debugging mode) is for a person watching, who is told instead.
     """
-    with lock.single_instance(lock.lock_path(ctx.obj.db)) as owner:
-        if not owner:
-            if sys.stderr.isatty():
-                click.echo("messnet: a node service is already running for this store; nothing to do", err=True)
-            return
-        logsetup.configure(ctx.obj.log, ctx.obj.log_level)
+    path = lock.lock_path(ctx.obj.db)
+    with contextlib.ExitStack() as stack:
         try:
-            _run_async(main(_node(ctx)))
+            owner = stack.enter_context(lock.single_instance(path))
+        except OSError as err:
+            raise click.ClickException(f"cannot open the event store {ctx.obj.db}: {err}") from err
+        if not owner:
+            pid = lock.running_pid(path)
+            if screen:
+                raise click.ClickException(f"a node service is already running (pid {pid}); "
+                                           "stop it with 'messnet serve -k'")
+            report(True, "running", f"already running (pid {pid})" if pid else "already running")
+            return
+        logged = screen or logsetup.configure(ctx.obj.log, ctx.obj.log_level)
+        where = "the screen" if screen else str(ctx.obj.log) if ctx.obj.log_level != "off" else "no log"
+        note = "" if logged else "; warning: cannot write the log file"
+
+        def ready() -> None:
+            report(True, "started", f"logging to {where}{note}")
+
+        try:
+            _run_async(main(_node(ctx), ready))
         except ValueError as err:
             raise click.ClickException(str(err)) from err
 
 
-@cli.command(context_settings=CONTEXT)
-@click.option("-l", "--listen", "addrs", multiple=True,
-              help="HOST:PORT to also accept tcp links on (repeatable); without it, serve what the config says.")
-@_scope_opt
-@click.pass_context
-def serve(ctx, addrs, scope):
-    """Run the node service: keep spool and state current, and serve links.
-
-    Without -l this is the full service from the config (listeners, links, peers), the same
-    as 'run'.  With -l it listens on just those addresses.  Only one runs per store; starting
-    another does nothing, so it is safe to start from cron or systemd (see 'install').
-    """
+def _service_main(addrs, scope):
+    """The coroutine function that runs the service for 'serve': everything the config says, or
+    just the listeners given with -l."""
     if not addrs:
-        _run_exclusive(ctx, daemon.run)
-        return
+        return daemon.run
 
-    async def main(node):
+    async def main(node, ready):
         servers = [await serve_tcp(node, a, scope) for a in addrs]
+        ready()
         try:
             await daemon.maintain(node)
         finally:
             for s in servers:
                 s.close()
 
-    _run_exclusive(ctx, main)
+    return main
+
+
+@cli.command(context_settings=CONTEXT)
+@click.option("-l", "--listen", "addrs", multiple=True,
+              help="HOST:PORT to also accept tcp links on (repeatable); without it, serve what the config says.")
+@click.option("-f", "--foreground", is_flag=True, help="Stay in the foreground (for systemd); log as the daemon does.")
+@click.option("-d", "--debug", is_flag=True, help="Stay in the foreground and log everything to the screen.")
+@click.option("-k", "--kill", "kill_it", is_flag=True, help="Stop the running daemon, if there is one.")
+@_scope_opt
+@click.pass_context
+def serve(ctx, addrs, foreground, debug, kill_it, scope):
+    """Run the node service as a daemon: spool and state upkeep, links, peers.
+
+    Starts a background daemon and returns.  Safe to run any number of times (from cron, say):
+    if one is already running, nothing more happens.  Only one runs per store.  It logs to
+    the file named by the 'log' setting (default ~/.cache/messnet/serve.log) and follows
+    changes to the config file.  Without -l it serves what the config says; with -l, just
+    those addresses.
+
+    \b
+    messnet serve          start the daemon (silent on success unless run from a terminal)
+    messnet serve -k       stop it
+    messnet serve -d       run in this terminal with debug logging, to see what it does
+    messnet serve -f       run in the foreground, logging as the daemon does (systemd uses this)
+    """
+    path = lock.lock_path(ctx.obj.db)
+    if kill_it:
+        if foreground or debug or addrs:
+            raise click.UsageError("-k/--kill cannot be combined with other options")
+        pid = lock.stop(path)
+        click.echo(f"messnet: stopped the daemon (pid {pid})" if pid else "messnet: no daemon is running")
+        return
+    main = _service_main(addrs, scope)
+    if debug or foreground:
+        if debug:
+            logsetup.screen()
+        _run_exclusive(ctx, main, screen=debug)
+        return
+    if pid := lock.running_pid(path):                    # already running: no need to fork
+        if sys.stdout.isatty():
+            click.echo(f"messnet: the daemon is already running (pid {pid})")
+        return
+    result = daemonize.start(lambda report: _run_exclusive(ctx, main, report))
+    if not result.ok:
+        raise click.ClickException(result.message)
+    if sys.stdout.isatty():
+        click.echo(f"messnet: {result.state} the daemon (pid {result.pid}); {result.message}")
 
 
 @cli.group(context_settings=CONTEXT, no_args_is_help=True)
@@ -342,7 +401,7 @@ def id_cmd(ctx):
 @cli.command(context_settings=CONTEXT)
 @click.pass_context
 def run(ctx):
-    """Run the node daemon: maintenance plus configured listeners and links (like 'serve')."""
+    """Run the node service in the foreground: like 'serve --foreground'."""
     _run_exclusive(ctx, daemon.run)
 
 
