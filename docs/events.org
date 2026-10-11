@@ -1,0 +1,554 @@
+#+title: messnet events and schema
+#+options: toc:2
+
+* Overview
+
+Everything messnet moves is an /event/: one small JSON object that says
+"this happened, here, now".  This document describes what every event
+looks like (the base schema), how event types are named, how the schema
+of an event's payload is defined, versioned and distributed, and how
+messnet uses it.
+
+Status matters here, so each section says which parts exist in the code
+today and which are a design that is not yet implemented:
+
+- *Implemented*: the base envelope, its validation, type globbing,
+  the =emit= / =tail= / =state= commands, and the built-in
+  =messnet.link.v1= event.
+- *Proposed*: per-type payload schemas, their distribution under
+  =etc/schemas/=, and validation against them.  Nothing in the code
+  reads a schema file yet.
+
+See [[file:plan.org]] for the protocol and module layout, [[file:design.org]]
+for the deployment and security model.
+
+* Why CloudEvents
+
+messnet does not invent an event format.  It uses [[https://cloudevents.io/][CloudEvents]] 1.0, a
+vendor-neutral specification for the /envelope/ of an event (what
+happened, who said so, when, how to identify it) while leaving the
+/payload/ to whoever defines the event.
+
+CloudEvents began in 2017 in the CNCF Serverless Working Group, to stop
+every cloud and eventing product from describing the same thing
+differently.  It entered the Cloud Native Computing Foundation as a
+sandbox project in May 2018, became incubating in October 2019 and
+/graduated/ on 25 January 2024, the CNCF's highest maturity level.  The
+current core specification is 1.0.2 (February 2022); it contained only
+clarifications over 1.0, which says something about how stable the
+format is.
+
+It is in real use by large organizations and projects.  Reports around
+the graduation named Microsoft (Azure Event Grid, Microsoft 365, Dapr),
+Google Cloud Eventarc, Alibaba Cloud EventBridge, IBM Cloud Code
+Engine, Adobe I/O Events, the European Commission, and the CNCF projects
+Knative, Argo, Falco and Harbor.  Treat that list as a snapshot; the
+project keeps a current one.  There are SDKs for many languages.
+
+What this buys messnet, a personal network with no vendor in it:
+
+- A format that someone else already thought hard about, including the
+  parts that are easy to get wrong (identifying an event, naming its
+  producer, what =time= means).
+- Events that can be handed to any CloudEvents-aware tool, or bridged
+  to a CloudEvents-aware service, without translation.  An event is
+  /structured mode/ JSON (the whole event, attributes included, is one
+  JSON object), which is also what a JSONL spool line is.
+- An obvious answer to "should I add field X?": if it describes the
+  event rather than the occurrence, it is an attribute; otherwise it
+  belongs in =data=.
+
+messnet uses no CloudEvents SDK.  The format is plain JSON and
+=event.py= is the whole implementation.  Sources:
+[[https://github.com/cloudevents/spec/blob/v1.0.2/cloudevents/spec.md][the 1.0.2 specification]],
+[[https://www.infoq.com/news/2024/04/cncf-cloudevents-graduation][InfoQ on the graduation]].
+
+* The base schema
+
+Every event, of every type, is a JSON object with these attributes.
+Lines of the spool and frames of the replication protocol carry exactly
+this object.
+
+| attribute         | CloudEvents | required by messnet | meaning                                              |
+|-------------------+-------------+---------------------+------------------------------------------------------|
+| =specversion=     | standard    | yes                 | Always ="1.0"=.                                      |
+| =id=              | standard    | yes                 | ULID: unique, and sorts by creation time.            |
+| =source=          | standard    | yes                 | URI-reference naming the producer.                   |
+| =type=            | standard    | yes                 | Event type name, e.g. =backup.run.v1=.               |
+| =time=            | standard    | no (always set)     | RFC 3339 time of the occurrence.                     |
+| =subject=         | standard    | no                  | What, within the source, the event is about.         |
+| =datacontenttype= | standard    | no (set with data)  | Always =application/json= in messnet.                |
+| =data=            | standard    | no                  | The payload: any JSON value, normally an object.     |
+| =dataschema=      | standard    | no, unused          | URI of the payload's schema.  See [[*Schema identity]]. |
+| =origin=          | extension   | yes                 | Name of the node that created the event.            |
+| =seq=             | extension   | yes                 | Position in the =(origin, scope)= stream, from 1.    |
+| =scope=           | extension   | no (default =all=)  | How far the event may travel: =host=, =lan=, =all=. |
+
+A real event, as printed by
+=messnet emit backup.run.v1 -s push phase=push result=ok n:=3 -p=:
+
+#+begin_src json
+{"specversion":"1.0","id":"01M4NC6QJJHD8QB2BGYYJZKR1C",
+ "time":"2026-10-11T07:40:09.171-04:00",
+ "source":"messnet://hokum/bv/cli","type":"backup.run.v1",
+ "origin":"hokum.bv","seq":1,"scope":"all","subject":"push",
+ "datacontenttype":"application/json",
+ "data":{"phase":"push","result":"ok","n":3}}
+#+end_src
+
+(Spool lines are the same object on a single line.)
+
+** Who sets what
+
+A producer supplies =type=, and optionally =data=, =subject=, =scope=
+and =source=.  messnet fills in the rest, and a producer cannot override
+it: =origin= and =seq= are assigned by the node (=emit --stdin= ignores
+any =origin= or =seq= in its input), which is what makes
+=(origin, scope, seq)= a trustworthy identity for deduplication and
+replication.
+
+- =id= :: a fresh ULID.  Together with =source= it satisfies the
+  CloudEvents rule that =source= + =id= be unique.  messnet itself
+  deduplicates on =(origin, scope, seq)=, not on =id=.
+- =source= :: =messnet://HOST/USER/PRODUCER=, where =PRODUCER= comes from
+  =emit -P= (default =cli=).  It names the /program/ that emitted the
+  event, not the node; the node is =origin=.  A cron script that always
+  says =-P backup= gets =messnet://hokum/bv/backup=.  Use =--source= to
+  give any other URI.
+- =subject= :: the thing the event is about, chosen by the type's
+  definition: the job step =push=, the path =local/x=, the peer name.
+  It is the third component of the state key, so it should identify
+  /which instance/ of the type this is (see [[*Snapshot or delta?]]).
+- =scope= :: =host= events never leave the node, =lan= events cross only
+  =lan= links, =all= events go anywhere including the shared spool.  The
+  type's definition may recommend a scope; the producer decides.
+
+** Where messnet departs from the specification
+
+- =type= is not reverse-DNS prefixed.  CloudEvents says it /should/ be
+  (=com.example.object.deleted.v2=) so that a global namespace has an
+  owner.  messnet is a private network where all producers belong to one
+  person or group, so the namespace is simply that group's.  If events
+  are ever bridged to a shared service, rewrite =type= at the bridge
+  (=backup.run.v1= becomes =org.example.backup.run.v1=).
+- =time= is optional in the specification and required by no messnet
+  check, but =emit= always sets it.  Consumers can rely on it for events
+  created by messnet itself; an event written by hand into a spool file
+  might lack it.
+- =origin=, =seq= and =scope= are /extension attributes/.  They follow the
+  specification's rules: lower case letters and digits, short, and a
+  string, integer and string respectively.  A CloudEvents consumer that
+  does not know them can ignore them.
+
+** What is validated today
+
+=event.validate= checks the envelope and nothing else: the object has
+=specversion=, =id=, =source=, =type=, =origin= and =seq=; =seq= is a
+positive integer; =scope= is one of the three; =type= and =origin= are
+non-empty.  It does /not/ look inside =data=, check the form of =type=,
+or consult any schema.  Replication is equally indifferent: a node
+stores and forwards events of types it has never heard of.  That is
+deliberate and stays true under the proposed design (see
+[[*Where validation happens]]).
+
+* Event types
+
+** What a type is
+
+The =type= attribute names a /kind of occurrence/ and, through its
+definition, the schema of =data= and the meaning of =subject=.  Consumers
+select on it (=tail -t=, =state get=), and it fixes where an event's
+latest state lives (=<state>/<type>/<origin>/<subject>.json=).  Treat it
+as an API name.
+
+** Naming
+
+A type is a dotted, lower case name ending in a version:
+
+#+begin_example
+FAMILY.NOUN[.NOUN...].vN          backup.run.v1
+                                  backup.verify.v1
+                                  host.load.v1
+                                  messnet.link.v1
+#+end_example
+
+- Segments separated by =.=, each made of =a-z=, =0-9= and, if needed,
+  =-=.  The reasons are practical: the type becomes a directory name in
+  the state tree, an argument to shell globs, and a key typed at a
+  prompt.  (The state layer percent-encodes anything else, so odd
+  names work, but do not rely on that.)
+- The *first segment* is the /family/: a group of related types owned by
+  one definition, like =backup=.  The family is the unit people
+  subscribe to (=backup.*=).
+- The *middle* segments say what the event is about, and are worded as
+  a thing that /happened or was observed/, not a command: =backup.run=
+  ("a backup run reported"), not =backup.start-the-run=.
+- The *last* segment is the version, =v= followed by a positive
+  integer.  It is part of the name, so =backup.run.v1= and
+  =backup.run.v2= are different types that happen to be related.
+- The family =messnet= is reserved for events messnet itself produces.
+
+This is a convention that tooling will check when schemas are
+implemented.  Today the only enforced rule is that the type is not
+empty, so =emit x= works.
+
+** Matching
+
+Consumers match type names with shell-style globs (Python =fnmatch=):
+=*= matches any run of characters /including dots/, so
+
+| glob            | matches                                              |
+|-----------------+------------------------------------------------------|
+| =backup.*=      | everything in the family, all versions               |
+| =backup.run.*=  | =backup.run.v1= and =backup.run.v2=                  |
+| =backup.run.v1= | exactly that type                                    |
+| =*.v1=          | every version-1 type of every family                 |
+| =*=             | everything                                           |
+
+A consumer that depends on the shape of the data should name the
+version it understands (=backup.run.v1=) rather than glob it; a consumer
+that only cares that something happened (a dashboard counting backup
+activity) can use =backup.run.*=.
+
+** How a type is defined
+
+A type is defined by a short document in the project that owns the
+family.  It states:
+
+1. the type name and a sentence on when it is emitted;
+2. the meaning of =subject= (and whether it is required);
+3. the schema of =data= (see [[*Defining payload schema]]);
+4. the usual =scope=, and any =source= convention;
+5. whether consecutive events are /snapshots/ or /deltas/ (see below).
+
+*** Example: the =backup= family
+
+The =backup= family reports on a backup script (=~/scripts/backup=).
+This is the example used in the =emit= help
+(=messnet emit backup.run.v1 -s push phase=push result=ok=).
+
+*backup.run.v1* is emitted each time a step of the backup script
+finishes, whether it succeeded or not.
+
+- =subject= (required): the step, e.g. =push=, =pull=, =local/x=.  One
+  state file exists per step.
+- =data=:
+  | field     | type    | required | meaning                                         |
+  |-----------+---------+----------+-------------------------------------------------|
+  | =result=  | string  | yes      | =ok= or =fail=                                  |
+  | =phase=   | string  | no       | the script phase that ran, usually the subject  |
+  | =n=       | integer | no       | number of items processed                       |
+  | =error=   | string  | no       | short message when =result= is =fail=           |
+- =scope=: =all=; the other hosts want to know.
+- =source=: =messnet://HOST/USER/backup= (=-P backup=).
+- Snapshot semantics: each event states the complete current outcome of
+  its step, so the newest event per step is the current status.
+
+The field list above is the definition's content; the same facts as a
+machine-readable schema are in [[*Defining payload schema]].
+
+Producing and consuming it:
+
+#+begin_example
+messnet emit backup.run.v1 -P backup -s push phase=push result=ok n:=3
+messnet emit backup.run.v1 -P backup -s push result=fail error='no route'
+messnet tail -t 'backup.*' --format text
+messnet state get 'backup.run.v1'         # newest outcome per step per host
+#+end_example
+
+Note =n:=3= versus =result=ok=.  On the command line =key=value= always
+produces a /string/ and =key:=json= produces any JSON value, so an
+integer needs the colon.  Schema authors should expect shell producers
+to send strings unless they take care; either design the schema to
+accept the string form or document the =key:=json= form where the
+field is numeric.
+
+A later addition to the family might be =backup.verify.v1= for a
+restore-check.  It would have its own definition, its own subjects, and
+no relationship to =backup.run.v1= beyond the shared prefix, which lets
+a consumer subscribe to =backup.*=.
+
+*** Snapshot or delta?
+
+Materialized state keeps only the newest event per =(type, origin,
+subject)=.  A type read through state should therefore be a snapshot:
+the newest event is the whole truth, and older ones can be forgotten.
+A type of pure occurrences (a shell command was run) is a /log/ and is
+read with =tail=; its subject, if any, only categorizes.  State the
+choice in the definition, because it determines how a producer must
+choose =subject= and how much goes in =data=.
+
+** The built-in family: =messnet=
+
+messnet defines one type itself.
+
+*messnet.link.v1*: a replication session changed state.  Always
+emitted with =scope=host= and =source=messnet://NODE/link=.
+=subject= is the peer's node name.  =data=:
+
+| field      | type    | meaning                                                  |
+|------------+---------+----------------------------------------------------------|
+| =state=    | string  | =up= or =down=                                           |
+| =link=     | string  | label of the link (how it was opened)                    |
+| =scope=    | string  | the link's scope                                         |
+| =sent=     | integer | events sent; only with =down=                            |
+| =received= | integer | events received; only with =down=                        |
+| =error=    | string  | why the session ended, when it ended badly               |
+
+It is what =messnet links= prints.
+
+* Versioning
+
+** The rules
+
+The version is the =.vN= suffix of the type.  =N= counts /incompatible/
+revisions of the definition, not releases.
+
+*Compatible* changes keep =N=:
+
+- add an optional field to =data=;
+- add a value to an open-ended string field, if consumers are told to
+  tolerate values they do not know;
+- tighten documentation.
+
+*Incompatible* changes make a new type with =N+1=:
+
+- remove or rename a field;
+- change the type or meaning of a field;
+- make an optional field required;
+- change what =subject= identifies;
+- change snapshot semantics.
+
+Consumers help this work by being /tolerant readers/: ignore fields you
+do not know, and treat an unknown enumerated value as "something I do
+not understand", not as an error.  Without that, every added field
+becomes an incompatible change.
+
+** Why the version is in the name
+
+CloudEvents leaves versioning to the producer.  The spec suggests a
+version suffix on =type= and, separately, that incompatible schema
+changes use a different =dataschema= URI.  messnet picks the former,
+and for reasons specific to it:
+
+- *The spool is forever.*  Events are immutable lines in append-only
+  files, replicated to nodes that may be offline for weeks, and kept
+  until you prune them.  A =backup.run.v1= event written today may be
+  read years later, so version 1 of the definition must remain readable
+  as long as such events can exist.  A version in the name makes the
+  version visible without opening the event or looking up a schema.
+- *Nodes upgrade at different times.*  A laptop that has been off for a
+  month will emit v1 after your desktop has moved to v2.  Both flow
+  through the same network and both must be understood.
+- *Filtering by version is free.*  Type globs, state directories, and
+  =tail -t= work on the full name, so v1 and v2 never share a state file
+  and a consumer pinned to v1 keeps seeing the v1 stream.
+
+** Migrating a type
+
+Suppose =backup.run.v2= replaces =result= (=ok=/=fail=) with =status=
+(=ok=/=fail=/=partial=) and requires =error= on failure.  A safe
+sequence:
+
+1. Publish the =backup.run.v2= definition and schema (see below).
+2. Update consumers to read both: =tail -t 'backup.run.*'=, or read
+   =state= for both directories.
+3. Update producers to emit v2.  Optionally emit v1 as well for a
+   transition period.
+4. When nothing reads v1 and old v1 events are no longer wanted, stop
+   emitting it.  Do not delete the v1 definition: old events still
+   exist, and tools that print or validate them need it.  Mark it
+   deprecated.
+
+State files make the cut-over visible: the
+=<state>/backup.run.v1/= tree stops changing and
+=<state>/backup.run.v2/= starts to fill.  Old state files may be deleted
+once nothing reads them (=messnet state update --rebuild= recreates
+state from the store if you change your mind).
+
+* Defining payload schema
+
+/Proposed: not yet implemented./  The envelope has a fixed schema
+(above).  The schema of =data= is defined per type, and this is the part
+that is designed but not yet built.
+
+** Format
+
+A payload schema is a [[https://json-schema.org/][JSON Schema]] (draft 2020-12) document describing
+the value of =data= only; it does not repeat or validate the envelope.
+JSON Schema is the obvious choice because =data= is JSON, validators
+exist for every language a producer might be written in, and it is the
+format CloudEvents tooling expects at =dataschema=.
+
+One file per type, named after the type:
+
+#+begin_example
+etc/schemas/backup.run.v1.json
+etc/schemas/backup.run.v2.json
+etc/schemas/messnet.link.v1.json
+#+end_example
+
+For the =backup.run.v1= described above:
+
+#+begin_src json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "messnet:schema/backup.run.v1",
+  "title": "backup.run.v1",
+  "description": "A step of the backup script finished.  Subject: the step name.",
+  "type": "object",
+  "required": ["result"],
+  "properties": {
+    "result": {"enum": ["ok", "fail"]},
+    "phase":  {"type": "string"},
+    "n":      {"type": "integer", "minimum": 0},
+    "error":  {"type": "string"}
+  },
+  "additionalProperties": true,
+  "x-messnet": {"subject": "required", "scope": "all", "semantics": "snapshot"}
+}
+#+end_src
+
+Notes:
+
+- =additionalProperties= stays =true=.  It is what lets a compatible
+  change (adding a field) work: the old schema still accepts new
+  events.  Set it to =false= only for payloads you intend to freeze.
+- =x-messnet= is a vendor keyword; JSON Schema validators ignore
+  unknown keywords.  It carries the parts of the definition that are
+  about the envelope (=subject=, usual =scope=, snapshot or log).
+- =description= is the human definition, for =messnet schema show= and
+  for whoever has to write the next producer.
+
+** Schema identity
+
+CloudEvents has the =dataschema= attribute, a URI naming the schema.  In
+messnet the =type= already names the schema, one to one, so
+=dataschema= is redundant and producers leave it out.  The schema's
+=$id= is the fixed URI =messnet:schema/<type>=, which is what a bridge
+should put in =dataschema= if an event is handed to a consumer that
+wants one.
+
+** Writing a new definition
+
+1. Pick the family and name: =FAMILY.NOUN.v1=.  Reuse an existing family
+   when the new type is about the same thing.
+2. Decide what =subject= identifies and whether the type is a snapshot
+   or a log.  This is the decision hardest to change afterwards.
+3. Write =etc/schemas/FAMILY.NOUN.v1.json=.  Keep =data= flat, with
+   scalars at the top level: it is what shell producers can emit with
+   =key=value=, what a prompt can read with =jq=, and what =--format
+   text= prints well.  Require only what every producer can supply.
+4. Add a sentence or two of =description=, including when the event is
+   emitted.
+5. Try it: =messnet emit TYPE …= from a shell, then =messnet tail= and
+   =messnet state get TYPE=.
+6. Let Syncthing distribute the file (next section).
+
+For a breaking change, write a new file with the next version number
+instead; never edit a published schema incompatibly.
+
+* Distribution of schema
+
+/Proposed: not yet implemented./  Schema files are small, change rarely, are needed by every node that
+produces or consumes the type, and must reach nodes that are sometimes
+offline.  messnet already has a mechanism for exactly that kind of file:
+the =etc= directory, shared by Syncthing, which carries =peers/= and
+=networks/=.  Schemas go in =etc/schemas/=:
+
+#+begin_example
+etc/
+  peers/<node>.toml        node ids and advertised links
+  networks/<name>.toml     link policy per network
+  schemas/<type>.json      payload schema per event type    (proposed)
+#+end_example
+
+Consequences:
+
+- *Not carried by the replication protocol.*  Schemas are not events and
+  do not travel on links.  Nodes that cannot share =etc= by Syncthing
+  (a work server reached only by ssh) copy the directory some other way
+  (=rsync=, a git checkout).  A node without a schema is not broken; it
+  simply does not validate that type.
+- *Built-in schemas ship with the package*, in =src/messnet/schemas/=,
+  for the =messnet= family.  They are found after =etc/schemas/= so a
+  local file can override them for testing.
+- *Authorship.*  Anyone who can write =etc= can add a schema, so this is
+  as trusted as the peer directory.  Schemas are validation aids, not a
+  security boundary: a schema cannot make a malicious peer's event safe,
+  only catch a careless producer's mistakes.  (Authenticating events is
+  covered in [[file:design.org]].)
+- *Old versions stay.*  Because the spool keeps old events, keep every
+  published version of every schema.  A =deprecated= note in =description=
+  is enough.
+- *Conflicts.*  Syncthing makes a =.sync-conflict= copy if two nodes
+  edit one file.  Treat published schemas as write-once and it does
+  not happen; changes arrive as new files.
+
+Where =etc= is shared, a schema is added by copying a file on any one
+node.  A project that defines a family can keep its schema files in its
+own repository and install them with a copy or symlink into =etc/schemas/=.
+
+* Using schema in messnet
+
+/Proposed: not yet implemented./
+
+** Where validation happens
+
+Validation exists to catch mistakes early and cheaply, never to refuse
+to carry data.  The principle is *validate at the edges, forward in the
+middle*:
+
+- =messnet emit=, /producer side/.  If a schema exists for the type,
+  =data= is checked before the event is sequenced and written.  A
+  failure is an error (non-zero exit, nothing emitted), because here
+  there is a person or a script to tell.  A =--no-validate= flag skips
+  the check.  No schema means no check.
+- *Ingest and replication*: no validation.  A node stores and forwards
+  every well-formed envelope.  Otherwise a node with an old or missing
+  schema would silently break delivery to nodes beyond it, and a bug in
+  one producer would stop being visible because its events were never
+  stored.
+- *Consumers* (=tail=, =state=, a prompt script) may validate when they
+  want to, with =messnet validate [-t GLOB]=, which reads events and
+  reports those that do not conform to their type's schema.  This is the
+  audit tool for finding the offending producer.
+
+Events that fail validation at the consumer should be skipped or
+flagged by that consumer; they are never removed from the spool.
+
+** Commands
+
+#+begin_example
+messnet schema list                  # known types, from etc/schemas and built-ins
+messnet schema show backup.run.v1    # print schema and description
+messnet schema check FILE            # lint a schema file: valid JSON Schema, name matches
+messnet validate [-t GLOB] [--since 1d]   # check stored events against their schemas
+#+end_example
+
+Each follows the project convention: logic in a library module
+(=schema.py=: find, load, validate), Click-only commands in =cli.py=,
+tests in =tests/=.  The envelope check stays in =event.py=.
+
+** What consumers can rely on
+
+Once a schema exists and producers validate against it, a consumer of
+=backup.run.v1= that has read the definition can rely on
+=data.result= being =ok= or =fail= for events emitted by a validating
+producer, and must still tolerate absent or malformed fields in events
+from producers that did not validate, from other versions, or from
+before the schema existed.  A prompt that shows the backup status
+should do so defensively (=jq -r '.data.result // "?"'=), because the
+state it reads may predate the schema.
+
+* Quick reference
+
+- Every event: =specversion id source type origin seq= required;
+  =time subject scope datacontenttype data= usual.
+- Type: =family.noun.vN=, lower case, version in the name.
+- =k=v= makes a string, =k:=json= makes any JSON value.
+- Compatible change: add an optional field, keep =vN=.  Incompatible
+  change: new file, new =vN+1=; keep the old schema forever.
+- Schema (proposed): =etc/schemas/<type>.json=, JSON Schema for =data=,
+  distributed by Syncthing with the rest of =etc=, validated at =emit=,
+  never at ingest or replication.

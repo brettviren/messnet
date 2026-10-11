@@ -9,8 +9,9 @@ stdio command (e.g. gonc), and a Syncthing-shared spool.
 
 See [[file:docs/connectivity.org]] for a step-by-step guide to connecting
 hosts with each supported method, and [[file:docs/plan.org]] for design
-and roadmap, and [[file:docs/design.org]] for an example deployment
-diagram and the security model.
+and roadmap, [[file:docs/design.org]] for an example deployment
+diagram and the security model, and [[file:docs/events.org]] for the
+event schema, type naming and versioning.
 
 * Quick start
 
