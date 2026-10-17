@@ -48,6 +48,15 @@ uv run messnet state get 'backup.*'
   =messnet uninstall= undoes it).  Received events go to the store;
   =serve= keeps the state files fresh, logs to =~/.cache/messnet/serve.log=,
   and follows changes to =config.toml= and =etc/peers= without a restart.
+- integrating :: =messnet integrate claude= makes Claude Code announce its
+  sessions (start, end, prompts, stops, notifications, permission requests)
+  as =claude.<hook>.v1= events, by adding command hooks to
+  =~/.claude/settings.json= (nothing else in it is touched).  Which hooks is
+  set by =[integrate.claude]= in the config: =enable = [...]= adds hooks to
+  the default set, =disable = [...]= removes some, =scope= says how far the
+  events travel.  Edit the config and run the command again to bring
+  Claude Code up to date; =--status= says what is integrated, =--remove=
+  undoes it.  See [[file:docs/events.org]], "The =claude= family".
 - state :: newest event per =(type, origin, subject)= as
   =<state>/<type>/<origin>/<subject>.json= — read these from prompts
   and panels; they work offline and need no messnet process.
@@ -66,6 +75,7 @@ messnet run                                          # foreground (same as serve
 messnet install systemd                              # keep it running: at boot, after crashes
 messnet install cron                                 # ... or via crontab; both are idempotent
 messnet install --list                               # what is installed
+messnet integrate claude                             # Claude Code hooks announce sessions (--status, --remove)
 messnet tui                                          # watch the network: hosts / event types, live latest event
 messnet subscribe -t 'backup.*'                      # follow events live through the local node
 #+end_example

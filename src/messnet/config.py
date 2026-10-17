@@ -65,6 +65,8 @@ class Config:
     # Force a network profile name instead of detecting one.
     network: str | None = None
     manage_interval: float = 30.0
+    # Settings of 'messnet integrate TARGET', as the table [integrate.TARGET] (see integrate_claude).
+    integrate: dict = field(default_factory=dict)
 
     def as_dict(self) -> dict:
         return {f.name: (str(v) if isinstance(v := getattr(self, f.name), Path) else v)
@@ -171,6 +173,6 @@ def merge_reloadable(cfg: Config, new: Config) -> tuple[list[str], list[str]]:
             changed.append(key)
             setattr(cfg, key, value)
     for f in fields(Config):
-        if f.name not in RELOADABLE and f.name not in ("path", "load_args") and getattr(cfg, f.name) != getattr(new, f.name):
+        if f.name not in RELOADABLE and f.name not in ("path", "load_args", "integrate") and getattr(cfg, f.name) != getattr(new, f.name):
             ignored.append(f.name)
     return changed, ignored

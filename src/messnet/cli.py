@@ -7,10 +7,11 @@ import logging
 import signal
 import sqlite3
 import sys
+from pathlib import Path
 
 import click
 
-from messnet import daemon, daemonize, install, lock, logsetup, manager, netdetect, peers, state, subscribe
+from messnet import claudehook, daemon, daemonize, install, integrate, integrate_claude, lock, logsetup, manager, netdetect, peers, state, subscribe
 from messnet.cli_config import config_grp
 from messnet.config import config_file, load_config
 from messnet.event import EventError, default_source, dumps, parse_assignments
@@ -677,6 +678,81 @@ def uninstall_cmd(target):
         raise _install_error(err) from err
     for note in outcome.notes:
         click.echo(f"{target}: {note}")
+
+
+@cli.command("integrate", context_settings=CONTEXT, no_args_is_help=True)
+@click.argument("target", type=click.Choice(list(integrate.TARGETS)))
+@click.option("--status", "show_status", is_flag=True, help="Only report whether TARGET is integrated, and how.")
+@click.option("--remove", is_flag=True, help="Undo the integration.")
+@click.option("--enable", multiple=True, metavar="EVENT",
+              help="Also announce EVENT, for this run (repeatable); put it in the config to keep it.")
+@click.option("--disable", multiple=True, metavar="EVENT",
+              help="Do not announce EVENT, for this run (repeatable); put it in the config to keep it.")
+@click.option("--file", "file", type=click.Path(dir_okay=False),
+              help="The target's configuration file to edit, instead of its usual one.")
+@click.option("--exe", type=click.Path(dir_okay=False), help="The messnet executable to call (default: this one).")
+@click.pass_context
+def integrate_cmd(ctx, target, show_status, remove, enable, disable, file, exe):
+    """Configure TARGET to work with messnet: claude.
+
+    \b
+    claude  Claude Code hooks announce session start and end, prompts, stops, notifications
+            and permission requests as claude.<hook>.v1 events (subject: the session id).
+
+    Which events is set in the config file, so that changing it and repeating this command
+    brings the target up to date:
+
+    \b
+      [integrate.claude]
+      enable  = ["PreToolUse", "SubagentStart"]   # beyond the default set
+      disable = ["Notification"]                  # out of the default set
+      scope   = "all"                             # host, lan or all
+
+    Safe to repeat; it edits only what it put there.  Global options given before
+    'integrate' (-c, --node, --db, ...) are passed on to the hooks.
+    """
+    if show_status and remove:
+        raise click.UsageError("--status and --remove cannot be combined")
+    conf = ctx.obj.integrate.get(target, {})
+    if not isinstance(ctx.obj.integrate, dict) or not isinstance(conf, dict):
+        raise click.ClickException(f"the 'integrate.{target}' setting must be a table")
+    try:
+        service = install.Service(install.resolve_exe(exe), install.global_args(**ctx.meta["global_opts"]))
+        req = integrate.Request(service, conf, enable, disable, Path(file) if file else None)
+        tgt = integrate.TARGETS[target]
+        if show_status:
+            status = tgt.status(req)
+            click.echo(f"{target}: {status.summary}")
+            for line in status.lines:
+                click.echo(f"  {line}")
+            return
+        outcome = (tgt.remove if remove else tgt.apply)(req)
+    except install.InstallError as err:
+        raise _install_error(err) from err
+    for note in outcome.notes:
+        click.echo(f"{target}: {note}")
+
+
+@cli.group("hook", context_settings=CONTEXT, no_args_is_help=True)
+def hook_grp():
+    """Entry points that other programs call (set up by 'integrate')."""
+
+
+@hook_grp.command("claude", context_settings=CONTEXT)
+@click.pass_context
+def hook_claude(ctx):
+    """Announce a Claude Code hook: read its JSON from stdin, emit a claude.<hook>.v1 event.
+
+    Called by Claude Code, not by hand, so it takes no arguments.  It never fails the hook:
+    a problem is reported on stderr and the exit status stays 0.
+    """
+    try:
+        args = claudehook.event_from_hook(json.load(sys.stdin))
+        conf = ctx.obj.integrate.get("claude", {})
+        scope = integrate_claude.scope_of(conf if isinstance(conf, dict) else {})
+        _node(ctx).emit(scope=scope, source=default_source("claude"), **args)
+    except (ValueError, OSError, sqlite3.Error, click.ClickException, install.InstallError) as err:
+        click.echo(f"messnet: claude hook not announced: {getattr(err, 'message', err)}", err=True)
 
 
 cli.add_command(config_grp)

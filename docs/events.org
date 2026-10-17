@@ -310,6 +310,26 @@ emitted with =scope=host= and =source=messnet://NODE/link=.
 
 It is what =messnet links= prints.
 
+** The =claude= family
+
+Emitted by =messnet hook claude=, which the Claude Code hooks set up by
+=messnet integrate claude= call (see [[file:../README.org]]).  There is one
+type per hook, named after it in lower case with hyphens:
+=claude.session-start.v1= for =SessionStart=, =claude.session-end.v1=,
+=claude.user-prompt-submit.v1=, =claude.stop.v1=, =claude.notification.v1=,
+=claude.permission-request.v1=, =claude.pre-tool-use.v1=, and so on
+(the full list is =claudehook.EVENTS=).  =source= is
+=messnet://HOST/USER/claude=; =subject= is the Claude Code session id, so a
+state file holds the newest event of each kind per session.  There are no
+payload schemas yet.
+
+=data= is small on purpose: =hook= (the Claude Code hook name) and, when
+present, =cwd=, =permission_mode=, =agent_id=, =agent_type= and a few fields
+specific to the hook (=source= and =model= for session start, =reason= for
+its end, =tool_name= for tool and permission hooks, =message= and
+=notification_type= for notifications).  Prompts, tool inputs and tool
+results are never copied, because events travel to other hosts.
+
 ** The =restic= family
 
 The =restic= family describes what a restic-based backup does.  It is
