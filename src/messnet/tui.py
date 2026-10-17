@@ -113,6 +113,7 @@ class MessnetTui(App[None]):
         self.feed = "starting"            # where 'latest' comes from: publisher | file | state
         self.detail_text = ""             # the detail and latest panes as plain text, for tests
         self.latest_text = ""
+        self.latest_age = ""              # the age shown in the latest pane, for tests
         self._sig: tuple | None = None
         self._reload_timer = None
 
@@ -202,6 +203,7 @@ class MessnetTui(App[None]):
         if self.group_key not in keys:
             self.group_key = keys[0] if keys else None
         self._fill_events(now)
+        self._show_latest()                    # its age moves on too
         if not self.events:
             self._set_detail(Text(f"No state files in {self.state_root}.\nIs 'messnet serve' running, and has anything "
                                   "been emitted?", style="dim"), "")
@@ -249,10 +251,12 @@ class MessnetTui(App[None]):
 
     def _show_latest(self) -> None:
         if self.latest is None:
-            self.latest_text = ""
+            self.latest_text = self.latest_age = ""
             shown = Text("Waiting for events…", style="dim")
         else:
-            shown = render_latest(self.latest, datetime.now(timezone.utc))
+            now = datetime.now(timezone.utc)
+            shown = render_latest(self.latest, now)
+            self.latest_age = eventview.age(eventview.parse_time(self.latest.get("time")), now)
             s = eventview.summary(self.latest)
             self.latest_text = f"{self.latest.get('origin')} {self.latest.get('type')} {s.text}"
         with contextlib.suppress(NoMatches):

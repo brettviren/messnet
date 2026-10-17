@@ -4,6 +4,7 @@ import asyncio
 import json
 import shutil
 import tempfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -134,6 +135,22 @@ def test_latest_pane_follows_arrivals(tmp_path):
                             "paths": ["/h"], "snapshot_id": "cd" * 32, "error": "x", "error_count": 3,
                             "total_files_processed": 5, "total_bytes_processed": 10}))
             assert "zed restic.commit.v1 partial" in app.latest_text and "3 unreadable" in app.latest_text
+
+    run(main())
+
+
+def test_ages_advance_without_new_events(tmp_path):
+    make_state(tmp_path)
+    when = datetime.now(timezone.utc) - timedelta(seconds=30)
+
+    async def main():
+        app = app_for(tmp_path, redraw_every=0.2)
+        async with app.run_test(size=(130, 40)) as pilot:
+            await until(pilot, lambda: app.feed == "state")
+            app.arrived(ev("demo.thing.v1", "alpha", "s", when.isoformat(), {"n": 1}))
+            first = app.latest_age
+            assert first.endswith("s ago")
+            await until(pilot, lambda: app.latest_age != first, timeout=3)     # no further arrival needed
 
     run(main())
 
