@@ -157,6 +157,11 @@ again, so pruned events are not re-replicated.
 | =lock.py=       | one node service per store (=flock=), find / stop it   |
 | =daemonize.py=  | double-fork daemon that reports back whether it started |
 | =service.py=    | the service: components reconciled with config / peers |
+| =publish.py=    | concentrator: events to pure consumers; latest file    |
+| =subscribe.py=  | consumer client of the concentrator                    |
+| =eventview.py=  | per-type event formatting (summary, sections)          |
+| =tuimodel.py=   | host / event-type views over the state files           |
+| =tui.py=        | =messnet tui= (Textual)                                |
 | =logsetup.py=   | rotating service log file                              |
 | =install.py=    | install / list / remove cron and systemd entries       |
 | =cli.py=        | Click commands only                                    |
@@ -179,6 +184,8 @@ messnet connect tcp HOST:PORT | ssh ALIAS | cmd -- ARGV…
 messnet run                          # foreground service: ingest, state, configured links
 messnet serve [-l HOST:PORT ...]     # the same as a background daemon; one per store
 messnet serve -f | -d | -k           # foreground / foreground+debug on screen / stop it
+messnet subscribe [-t GLOB] [--replay N]   # follow events live via the node's publisher
+messnet tui                          # terminal view of the network (needs the tui extra)
 messnet install cron|systemd|--list  # keep serve running (idempotent)
 messnet uninstall cron|systemd       # undo; not installed is a no-op
 messnet config show [--file]         # effective configuration / raw file

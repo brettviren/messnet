@@ -21,6 +21,9 @@ messnet = "messnet:main"
 iroh = [
     "iroh>=1.1.0",
 ]
+tui = [
+    "textual>=8.2.8",
+]
 
 [build-system]
 requires = ["setuptools>=61"]
@@ -32,4 +35,5 @@ messnet = ["schemas/*.json"]
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
+    "textual>=8.2.8",
 ]

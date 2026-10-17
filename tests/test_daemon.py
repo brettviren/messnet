@@ -23,7 +23,7 @@ def free_port() -> int:
 class Node:
     """A messnet configuration in a temp dir, and ways to run the command line against it."""
 
-    def __init__(self, tmp: Path, top: str = "", tail: str = ""):
+    def __init__(self, tmp: Path, top: str = "", tail: str = "", publish: str = "[]", latest: str = "off"):
         self.tmp = tmp
         self.config = tmp / "config.toml"
         self.log = tmp / "serve.log"
@@ -36,6 +36,8 @@ etc = "{tmp}/etc"
 key = "{tmp}/key"
 log = "{self.log}"
 poll = 0.05
+latest = "{latest}"
+publish = {publish}
 {top}
 {tail}''')
         self.lockfile = lock.lock_path(tmp / "db")
@@ -213,3 +215,55 @@ def test_lock_holder_is_the_process_that_really_holds_it(tmp_path):
     finally:
         holder.kill()
         holder.wait()
+
+
+# ---- the concentrator, end to end -------------------------------------------------------------
+
+@pytest.fixture
+def sockdir():
+    import shutil
+    import tempfile
+    d = Path(tempfile.mkdtemp(prefix="mn-"))
+    yield d
+    shutil.rmtree(d, ignore_errors=True)
+
+
+def test_daemon_publishes_events_from_other_processes(tmp_path, sockdir):
+    sock, latest = sockdir / "e.sock", tmp_path / "latest.json"
+    node = Node(tmp_path, publish=f'[{{kind = "unix", path = "{sock}"}}]', latest=str(latest))
+    try:
+        assert node.run("serve").returncode == 0
+        assert node.wait_for(sock.exists)
+        assert oct(sock.stat().st_mode & 0o777) == "0o600"
+        consumer = subprocess.Popen(node.argv("subscribe", "-t", "demo.*", "-n", "2", "--replay", "1"),
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        time.sleep(0.5)
+        node.run("emit", "other.v1", "x=1")                                   # filtered out for this consumer
+        node.run("emit", "demo.thing.v1", "-s", "a", "n:=1")                  # a different process makes events
+        node.run("emit", "demo.thing.v1", "-s", "b", "n:=2")
+        out, err = consumer.communicate(timeout=20)
+        got = [json.loads(line) for line in out.splitlines()]
+        assert [e["data"]["n"] for e in got] == [1, 2] and all(e["type"] == "demo.thing.v1" for e in got), (out, err)
+        def latest_n():
+            try:
+                return json.loads(latest.read_text())["data"]["n"]
+            except (OSError, ValueError, KeyError):
+                return None
+
+        assert node.wait_for(lambda: latest_n() == 2)
+        newest = json.loads(latest.read_text())
+        assert newest["type"] == "demo.thing.v1" and newest["data"] == {"n": 2}       # the last to arrive
+        text = node.run("subscribe", "-n", "1", "--replay", "1", "--format", "text")
+        assert text.returncode == 0 and "demo.thing.v1" in text.stdout
+        node.run("serve", "-k")
+        assert node.wait_for(lambda: not sock.exists())                       # the socket goes with the daemon
+        gone = node.run("subscribe", "-n", "1")
+        assert gone.returncode == 1 and "cannot connect" in gone.stderr and "messnet serve" in gone.stderr
+    finally:
+        node.run("serve", "-k")
+
+
+def test_subscribe_with_no_publisher_configured_says_so(tmp_path):
+    node = Node(tmp_path)
+    res = node.run("subscribe", "-n", "1")
+    assert res.returncode == 1 and "publishes nowhere" in res.stderr

@@ -374,6 +374,168 @@ connections.  So:
   directories; it does not need inotify, so it works the same on any
   filesystem, including a Syncthing folder.
 
+* Watching the network
+
+Three ways to follow the events a node receives, from cheapest to richest.
+All of them read what is already in the node: nothing here talks to peers.
+
+| way | what you get | needs |
+|-|-|-|
+| state files | newest event per =(type, origin, subject)=, as JSON files | nothing running (but stale until =serve= has run) |
+| =latest= file | the one newest event to arrive, overwritten each time | =messnet serve= |
+| publisher (concentrator) | every event, live, over one local connection | =messnet serve= |
+
+=messnet tui= is a terminal application built on all three.
+
+** The =latest= file
+
+=serve= keeps one file, by default =~/.cache/messnet/latest.json=, holding the
+most recent event to reach the node's store, as JSON, replaced atomically
+(write to a temp file, rename), so a reader never sees half of one.  "Reach the
+store" covers every route in: the node's own =emit=, events read from the
+Syncthing spool, and events received over links.  Poll it, or watch it with
+inotify; =cat latest.json | jq .= is a complete client.
+
+#+begin_example
+messnet config set latest ~/somewhere/latest.json   # elsewhere
+messnet config set latest off                       # not at all
+#+end_example
+
+** The concentrator: a single local connection to the whole network
+
+A client that wants to follow the network should not have to speak the
+replication protocol, hold peer keys, or know which links exist.  The node
+already does that.  With a =publish= entry, =serve= also listens for /consumers/
+and sends each one every event the node receives.  The traffic is one way (a
+consumer says what it wants once, then only the node talks), so a consumer can
+neither inject events nor disturb replication.
+
+#+begin_src toml
+# config.toml; the default is the first line alone
+publish = [
+  {kind = "unix"},                                      # ~/.cache/messnet/events.sock, mode 0600
+  {kind = "tcp", addr = "127.0.0.1:7710"},              # for clients that cannot use a unix socket
+]
+#+end_src
+
+Entries may be added, changed and removed while =serve= runs (see [[*Following
+configuration changes]]); =publish = []= publishes nowhere.  A unix socket path is
+limited to 107 bytes by the operating system: an explicit =path= that is longer is
+rejected with a message, and the default (which is =~/.cache/messnet/events.sock=)
+falls back to =/tmp/messnet-UID/events.sock= if your cache directory is that deep.
+
+*Protocol.*  JSON lines in both directions, like the replication protocol
+(=docs/events.org= describes the events themselves):
+
+#+begin_example
+consumer -> node   {"op":"subscribe","types":["backup.*"],"origin":"hokum.bv","replay":20}
+node -> consumer   {"op":"hello","proto":1,"node":"hokum.bv","scope":"host"}
+                   {"op":"event","event":{...}}      the last 20 matching events first, then live
+                   {"op":"ping"}                      every 30 s, so a dead consumer is noticed
+#+end_example
+
+Every field of =subscribe= is optional (=types= are globs, =origin= an exact
+node name), and the line may be left out altogether, which means "everything,
+no replay".  A bad first line gets ={"op":"error","reason":...}= and a hang-up.
+So the smallest consumer is a shell one-liner:
+
+#+begin_example
+printf '{"op":"subscribe","types":["demo.*"],"replay":1}\n' | nc -U ~/.cache/messnet/events.sock
+#+end_example
+
+*Scope.*  A consumer has a scope, as a link does, and is sent only what that
+scope allows: =all= sees =all= events, =lan= also =lan= events, =host=
+everything, including =host= events that never leave the node.  The default is
+=host= for a unix socket (it is mode 0600: only you can connect; the default path is
+under =~/.cache= and not =$XDG_RUNTIME_DIR=, which cron does not set, so a daemon
+started by cron and a client run from a shell find each other) and =all= for
+TCP (anyone who can reach the port can read it; the default address in
+the example is loopback, and =serve= warns about any other).  There is no
+authentication beyond that, so do not put a TCP publisher on a network you do not
+trust; for another host, use ssh (below).
+
+*How it works.*  Each consumer is served from the store by its own cursor,
+exactly as a replication session is: poll for rows past the cursor, send, advance.
+Nothing queues in memory, so a slow consumer costs only its own place in line,
+and a consumer that disconnects and returns can resume with =replay=.  Events
+made by other processes (the =emit= command), read from the spool, or received
+over a link all land in the store, so all of them are delivered; the delay is
+the node's =poll= interval (0.25 s).
+
+*Other hosts.*  =ssh HOST messnet subscribe= is a consumer of HOST's publisher
+over an encrypted, authenticated link, with no new server code.  The node can
+also serve consumers over any other kind of connection it can serve peers over:
+the per-consumer handler (=publish.serve_consumer=) takes any reader/writer pair.
+Only the unix socket and TCP are wired up so far; iroh and gonc consumers would
+be a listener each, with the same handler.
+
+** =messnet subscribe=
+
+The reference consumer.  Prints events as they arrive, as JSON lines or text:
+
+#+begin_example
+messnet subscribe                              # everything, from now on
+messnet subscribe -t 'backup.*' --replay 5     # the last five backup events, then live
+messnet subscribe -o hokum.bv --format text -n 10
+messnet subscribe --connect 127.0.0.1:7710     # another publisher (unix:PATH or HOST:PORT)
+ssh gamma messnet subscribe -t 'restic.*'      # a remote node's
+#+end_example
+
+Unlike =tail -f= it talks to the daemon, so it works with the node's real live
+state and with remote nodes.  It fails with a clear message if nothing is
+publishing.
+
+** =messnet tui=
+
+#+begin_example
+messnet tui
+#+end_example
+
+A terminal application over the state files.  Keys: =h= host view, =t=
+event-type view, =Tab= next pane, arrows to select, =r= refresh, =q= quit.
+
+- *Host view*: the left pane lists the hosts, each with a coloured dot for the
+  health of its backups, the number of events and how recent the newest is;
+  selecting a host lists its events (type, subject, age, a one-line summary).
+- *Event view*, its transpose: the left pane lists the event types; selecting
+  one lists that type as received from every host.
+- Selecting an event lays it out below: not JSON, but sections made for its
+  type.  A =restic.commit.v1= shows the outcome, repository and snapshot, files
+  and bytes, timing and, for a transfer, a table of the snapshots copied; a
+  =restic.status.v1= shows a per-stream table of the latest commits and
+  retention and the state of the password cache, with a warning when it
+  expires within a day; =restic.prime.v1=, =restic.forget.v1= and
+  =messnet.link.v1= have their own, and any other type gets its envelope and
+  its data fields flattened.  Adding a type is one registration in
+  =eventview.py=.
+- The bottom pane always shows the newest event to arrive from any host or type,
+  and updates as events come in.
+
+Where the data comes from: the lists and detail come from the state files,
+checked every 1.5 s and redrawn when one changes, with your selection kept.  The
+bottom pane follows the node's publisher (the header says =live: connected to
+unix:...= and the pane's title =Latest event · live=).  If no node is publishing
+it watches the =latest= file (title: =from the latest.json file=).  With neither
+it shows the event in the state file that changed last, which is when this node
+stored it, so it still follows what arrives (title: =newest state file (no live
+feed ...)=).  The title always says which of the three you are looking at, so a
+pane that is not live is never mistaken for one.  A daemon that predates the
+publisher, or is not running, is the usual reason for the last two.  =--no-live=
+forces the last mode; =--connect= follows another node's publisher.
+
+A host's dot reflects the health of what it reports (the worst outcome among
+its events: red failed, yellow partial or unknown, green ok), not its links:
+=messnet.link.v1= records describe connections, which come and go, so they do
+not colour anything.
+
+The TUI needs the =textual= package, an optional extra so that nodes that
+never show a screen do not carry it:
+
+#+begin_example
+uv tool install --editable '.[tui]'            # from a checkout, to install it with the extra
+uv sync --extra tui                            # or in a development checkout
+#+end_example
+
 * Security
 
 ** Trust model in one paragraph

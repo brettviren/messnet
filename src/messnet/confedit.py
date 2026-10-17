@@ -27,6 +27,7 @@ SCALARS = {
     "node": str, "etc": "dir", "spool": "dir", "local_spool": "dir", "db": str, "state": "dir",
     "key": str, "secrets": "dir", "gonc_bin": str, "network": str, "poll": float,
     "manage_interval": float, "tcp_auth": bool, "peers": "peers", "log": str, "log_level": str,
+    "latest": str,
 }
 
 # Fields that only configure the serving side; never published.

@@ -37,6 +37,12 @@ uv run messnet state get 'backup.*'
 - schema :: optional JSON Schema per event type (=etc/schemas/<type>.json=,
   shared like the rest of =etc=); =emit= checks =data= against it and
   =messnet validate= audits stored events.  Replication never checks.
+- watching it :: =messnet tui= is a terminal view of the state files
+  (host view or event-type view, events formatted per type, plus the newest
+  event live; needs the =tui= extra).  =serve= also offers pure consumers a
+  single local connection (a unix socket by default, =publish= in the config;
+  =messnet subscribe= is the reference client) and keeps =latest.json= holding the
+  newest event.  See [[file:docs/design.org]], "Watching the network".
 - keeping it running :: =messnet install cron|systemd= makes sure
   =messnet serve= runs from boot and after crashes (safe to repeat;
   =messnet uninstall= undoes it).  Received events go to the store;
@@ -60,6 +66,8 @@ messnet run                                          # foreground (same as serve
 messnet install systemd                              # keep it running: at boot, after crashes
 messnet install cron                                 # ... or via crontab; both are idempotent
 messnet install --list                               # what is installed
+messnet tui                                          # watch the network: hosts / event types, live latest event
+messnet subscribe -t 'backup.*'                      # follow events live through the local node
 #+end_example
 
 * Peers, networks and policy

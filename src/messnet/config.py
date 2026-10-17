@@ -45,6 +45,11 @@ class Config:
     # (path argument, overrides) this was loaded with, so a running service can reload the
     # file the same way (not a config key).
     load_args: tuple | None = field(default=None, repr=False)
+    # Pure consumers of events (the concentrator): each entry is {kind = "unix", path = ..., scope = ...}
+    # or {kind = "tcp", addr = "HOST:PORT", scope = ...}.  The default is one unix socket; [] for none.
+    publish: list = field(default_factory=lambda: [{"kind": "unix"}])
+    # One file, overwritten with the newest event to arrive; None for none.
+    latest: Path | None = field(default_factory=lambda: _xdg("XDG_CACHE_HOME", ".cache") / "messnet" / "latest.json")
     # `serve` / `run` log here (rotating) at log_level: off, error, warning, info or debug.
     log: Path = field(default_factory=lambda: _xdg("XDG_CACHE_HOME", ".cache") / "messnet" / "serve.log")
     log_level: str = "info"
@@ -66,12 +71,14 @@ class Config:
                 for f in fields(self) if f.name not in ("path", "load_args")}
 
 
-_PATHS = {"spool", "local_spool", "db", "state", "etc", "key", "secrets", "log"}
+_PATHS = {"spool", "local_spool", "db", "state", "etc", "key", "secrets", "log", "latest"}
 _ENV_KEYS = ("node", "spool", "local_spool", "db", "state", "etc", "key", "poll", "network", "log", "log_level")
 LOG_LEVELS = ("off", "error", "warning", "info", "debug")
 
 
 def _coerce(key: str, value):
+    if key == "latest" and str(value).lower() in ("", "off", "none", "false"):
+        return None
     if key in _PATHS:
         return Path(value).expanduser()
     if key in ("poll", "manage_interval"):
@@ -128,7 +135,7 @@ def load_config(path: str | Path | None = None, must_exist: bool = True, **overr
 # Settings a running service picks up when the file changes.  The others (node name and the
 # directories and files of the store) are opened once; changing them takes a restart.
 RELOADABLE = ("listen", "links", "peers", "advertise", "gonc_serve", "gonc_bin", "secrets", "tcp_auth",
-              "poll", "manage_interval", "network", "iroh", "log", "log_level")
+              "poll", "manage_interval", "network", "iroh", "log", "log_level", "publish", "latest")
 # Of iroh's settings, these are fixed once the endpoint is open.
 IROH_FIXED = ("bind", "relays")
 

@@ -130,6 +130,22 @@ class Store:
                 out[stream_key(origin, scope)] = missing
         return out
 
+    def tail(self, count: int, types: list[str] | None = None, origin: str | None = None,
+             upto: int | None = None, scopes: tuple[str, ...] | None = None) -> list[tuple[int, dict]]:
+        """The last COUNT (rowid, event) matching the filters, oldest first; UPTO bounds the rowid."""
+        where, args = ["rowid <= ?"], [upto if upto is not None else 2**62]
+        if scopes is not None:
+            where.append("scope IN (" + ", ".join("?" for _ in scopes) + ")")
+            args.extend(scopes)
+        if types:
+            where.append("(" + " OR ".join("type GLOB ?" for _ in types) + ")")
+            args.extend(types)
+        if origin:
+            where.append("origin = ?")
+            args.append(origin)
+        sql = f"SELECT rowid, json FROM events WHERE {' AND '.join(where)} ORDER BY rowid DESC LIMIT {int(count)}"
+        return [(rowid, json.loads(text)) for rowid, text in reversed(self.db.execute(sql, args).fetchall())]
+
     def max_rowid(self) -> int:
         return self.db.execute("SELECT COALESCE(MAX(rowid), 0) FROM events").fetchone()[0]
 
@@ -165,12 +181,16 @@ class Store:
 
     def query(self, types: list[str] | None = None, origin: str | None = None,
               since: float | None = None, after: int = 0, limit: int | None = None,
-              ) -> Iterator[tuple[int, dict]]:
+              scopes: tuple[str, ...] | None = None) -> Iterator[tuple[int, dict]]:
         """Yield (rowid, event) in rowid order matching the filters.
 
-        TYPES are glob patterns (sqlite GLOB, case sensitive), any may match.
+        TYPES are glob patterns (sqlite GLOB, case sensitive), any may match.  SCOPES, if
+        given, limits events to those scopes.
         """
         where, args = ["rowid > ?"], [after]
+        if scopes is not None:
+            where.append("scope IN (" + ", ".join("?" for _ in scopes) + ")")
+            args.extend(scopes)
         if types:
             where.append("(" + " OR ".join("type GLOB ?" for _ in types) + ")")
             args.extend(types)

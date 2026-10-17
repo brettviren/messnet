@@ -35,7 +35,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from messnet import config as cfgmod
-from messnet import daemon, logsetup, manager
+from messnet import daemon, logsetup, manager, publish
 from messnet.links import check_spec, keep_link, link_label, serve_tcp
 from messnet.node import Node
 
@@ -106,15 +106,16 @@ class TaskComponent(Component):
 
 
 class ListenComponent(Component):
-    """A TCP listener.  Stopping it also ends the sessions it accepted."""
+    """A listener, started by STARTER (which returns the server).  Stopping it also ends the
+    sessions it accepted, and runs the server's ``cleanup()`` if it has one."""
 
-    def __init__(self, node: Node, addr: str, scope: str):
-        super().__init__(f"listener {addr} ({scope} scope)")
-        self.node, self.addr, self.scope = node, addr, scope
+    def __init__(self, label: str, starter: Callable[[], Awaitable[asyncio.Server]]):
+        super().__init__(label)
+        self.starter = starter
         self.server: asyncio.Server | None = None
 
     async def start(self) -> None:
-        self.server = await serve_tcp(self.node, self.addr, self.scope)
+        self.server = await self.starter()
 
     async def stop(self) -> None:
         if not self.server:
@@ -126,6 +127,8 @@ class ListenComponent(Component):
         await asyncio.gather(*sessions, return_exceptions=True)
         with contextlib.suppress(asyncio.TimeoutError):
             await asyncio.wait_for(self.server.wait_closed(), 2.0)
+        if cleanup := getattr(self.server, "cleanup", None):
+            cleanup()
 
 
 class Service:
@@ -155,7 +158,15 @@ class Service:
                 f"link {link_label(s)}", lambda: keep_link(node, s))
         for ls in listen_specs(cfg.listen):
             addr, scope = ls["addr"], ls.get("scope", "all")
-            want[("listen", addr, scope)] = lambda a=addr, sc=scope: ListenComponent(node, a, sc)
+            want[("listen", addr, scope)] = lambda a=addr, sc=scope: ListenComponent(
+                f"listener {a} ({sc} scope)", lambda: serve_tcp(node, a, sc))
+        for spec in cfg.publish:
+            spec = publish.check_publish(dict(spec))
+            want[("publish", canon(spec))] = lambda s=spec: ListenComponent(
+                f"event publisher {publish.label(s)}", lambda: publish.serve(node, s))
+        if cfg.latest:
+            want[("latest", str(cfg.latest))] = lambda p=cfg.latest: TaskComponent(
+                f"latest-event file {p}", lambda: publish.write_latest(node, p))
         if cfg.gonc_serve:
             from messnet import gonc
             for ep in cfg.gonc_serve:
