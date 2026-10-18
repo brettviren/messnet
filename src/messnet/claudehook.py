@@ -3,8 +3,10 @@
 Claude Code runs a *hook* command at points in a session and writes a JSON description of
 the occurrence on its stdin.  ``messnet hook claude`` (which calls :func:`event_from_hook`)
 turns that into an event of type ``claude.<hook-name>.v1``, e.g. ``SessionStart`` becomes
-``claude.session-start.v1``.  The subject is the Claude session id, so the state files hold
-the newest event of each kind per session.
+``claude.session-start.v1``.  The subject names the project and the session, e.g.
+``messnet@cf7f77da`` (the working directory's base name and the start of the session id), so
+the state files hold the newest event of each kind per session and a person can tell which
+project it is.  The full session id is kept in ``data``.
 
 Only a few small fields of the hook input are kept.  Prompts, tool inputs and tool results
 are deliberately dropped: events travel to other hosts, and those can be large and private.
@@ -15,6 +17,7 @@ set announced unless the ``[integrate.claude]`` configuration says otherwise (se
 """
 
 import re
+from pathlib import PurePosixPath
 
 # Hooks that only observe, in the order they are listed: name -> the hook-input fields kept
 # besides the common ones.  Hooks left out of the catalogue (WorktreeCreate, ...) expect the
@@ -50,8 +53,9 @@ EVENTS: dict[str, tuple[str, ...]] = {
 DEFAULT_EVENTS = ("SessionStart", "SessionEnd", "UserPromptSubmit", "Stop", "StopFailure",
                   "Notification", "PermissionRequest", "SubagentStop")
 
-COMMON = ("cwd", "permission_mode", "agent_id", "agent_type")
+COMMON = ("session_id", "cwd", "permission_mode", "agent_id", "agent_type")
 MAX_TEXT = 300
+SESSION_CHARS = 8
 TYPE_FORMAT = "claude.{}.v1"
 
 
@@ -76,6 +80,18 @@ def event_type(name: str) -> str:
     return TYPE_FORMAT.format(re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "-", name).lower())
 
 
+def subject_for(payload: dict) -> str | None:
+    """The event subject for hook input PAYLOAD: ``PROJECT@SESSION``, where PROJECT is the base
+    name of the working directory and SESSION the start of the session id.  Either alone if the
+    other is missing, None if both are."""
+    def text(key):
+        value = payload.get(key)
+        return value if isinstance(value, str) else ""
+    project = PurePosixPath(text("cwd")).name
+    session = text("session_id")[:SESSION_CHARS]
+    return "@".join(part for part in (project, session) if part) or None
+
+
 def event_from_hook(payload: dict) -> dict:
     """Describe the hook input PAYLOAD as arguments for ``Node.emit``: type, data, subject.
 
@@ -92,5 +108,4 @@ def event_from_hook(payload: dict) -> dict:
             data[field] = value if len(value) <= MAX_TEXT else value[:MAX_TEXT - 1] + "…"
         elif isinstance(value, (int, float, bool)):
             data[field] = value
-    session = payload.get("session_id")
-    return {"type": event_type(name), "data": data, "subject": session if isinstance(session, str) and session else None}
+    return {"type": event_type(name), "data": data, "subject": subject_for(payload)}

@@ -319,12 +319,14 @@ type per hook, named after it in lower case with hyphens:
 =claude.user-prompt-submit.v1=, =claude.stop.v1=, =claude.notification.v1=,
 =claude.permission-request.v1=, =claude.pre-tool-use.v1=, and so on
 (the full list is =claudehook.EVENTS=).  =source= is
-=messnet://HOST/USER/claude=; =subject= is the Claude Code session id, so a
-state file holds the newest event of each kind per session.  There are no
+=messnet://HOST/USER/claude=; =subject= is =PROJECT@SESSION=, such as
+=messnet@cf7f77da=: the base name of the working directory and the first
+eight characters of the Claude Code session id.  A state file thus holds
+the newest event of each kind per session, labeled by project.  There are no
 payload schemas yet.
 
 =data= is small on purpose: =hook= (the Claude Code hook name) and, when
-present, =cwd=, =permission_mode=, =agent_id=, =agent_type= and a few fields
+present, =session_id= (in full), =cwd=, =permission_mode=, =agent_id=, =agent_type= and a few fields
 specific to the hook (=source= and =model= for session start, =reason= for
 its end, =tool_name= for tool and permission hooks, =message= and
 =notification_type= for notifications).  Prompts, tool inputs and tool

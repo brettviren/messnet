@@ -697,7 +697,7 @@ def integrate_cmd(ctx, target, show_status, remove, enable, disable, file, exe):
 
     \b
     claude  Claude Code hooks announce session start and end, prompts, stops, notifications
-            and permission requests as claude.<hook>.v1 events (subject: the session id).
+            and permission requests as claude.<hook>.v1 events (subject: PROJECT@SESSION).
 
     Which events is set in the config file, so that changing it and repeating this command
     brings the target up to date:

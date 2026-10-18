@@ -73,14 +73,22 @@ def test_event_type_names():
 
 def test_event_from_hook_keeps_little():
     got = claudehook.event_from_hook({
-        "hook_event_name": "PreToolUse", "session_id": "abc", "cwd": "/w", "tool_name": "Bash",
+        "hook_event_name": "PreToolUse", "session_id": "abcdef123456", "cwd": "/home/u/proj", "tool_name": "Bash",
         "tool_input": {"command": "secret"}, "prompt": "private", "transcript_path": "/t"})
-    assert got == {"type": "claude.pre-tool-use.v1", "subject": "abc",
-                   "data": {"hook": "PreToolUse", "cwd": "/w", "tool_name": "Bash"}}
+    assert got == {"type": "claude.pre-tool-use.v1", "subject": "proj@abcdef12",
+                   "data": {"hook": "PreToolUse", "session_id": "abcdef123456", "cwd": "/home/u/proj",
+                            "tool_name": "Bash"}}
     long = claudehook.event_from_hook({"hook_event_name": "Notification", "message": "x" * 1000})
     assert len(long["data"]["message"]) == claudehook.MAX_TEXT and long["subject"] is None
     with pytest.raises(ValueError):
         claudehook.event_from_hook({"session_id": "abc"})
+
+
+def test_subject_names_project_and_session():
+    subject = claudehook.subject_for
+    assert subject({"cwd": "/a/messnet", "session_id": "cf7f77da-b5d2"}) == "messnet@cf7f77da"
+    assert subject({"cwd": "/a/messnet/"}) == "messnet" and subject({"session_id": "s-1"}) == "s-1"
+    assert subject({"cwd": "/", "session_id": ""}) is None and subject({}) is None
 
 
 # ---- the event set -----------------------------------------------------------------------
@@ -225,8 +233,8 @@ def test_hook_claude_emits_the_event(tmp_path):
                "prompt": "never stored"}
     run(tmp_path, "hook", "claude", input=json.dumps(payload))
     (ev,) = [json.loads(line) for line in run(tmp_path, "tail", "-t", "claude.*").splitlines()]
-    assert ev["type"] == "claude.session-start.v1" and ev["subject"] == "s-1" and ev["scope"] == "all"
-    assert ev["data"] == {"hook": "SessionStart", "cwd": "/w", "source": "startup"}
+    assert ev["type"] == "claude.session-start.v1" and ev["subject"] == "w@s-1" and ev["scope"] == "all"
+    assert ev["data"] == {"hook": "SessionStart", "session_id": "s-1", "cwd": "/w", "source": "startup"}
     assert ev["source"].endswith("/claude")
 
 
