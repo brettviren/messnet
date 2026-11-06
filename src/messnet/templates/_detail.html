@@ -1,0 +1,14 @@
+{% macro sections(secs) %}
+{% for sec in secs %}
+  <h3>{{ sec.title }}</h3>
+  {% if sec.lines %}
+  <dl class="lines">{% for line in sec.lines %}<dt>{{ line.label }}</dt><dd class="{{ styles[line.style] }}">{{ line.value }}</dd>{% endfor %}</dl>
+  {% endif %}
+  {% if sec.columns %}
+  <table><thead><tr>{% for c in sec.columns %}<th class="dim">{{ c }}</th>{% endfor %}</tr></thead>
+    <tbody>{% for row in sec.rows %}{% set rs = sec.row_styles[loop.index0] if sec.row_styles else '' %}
+      <tr>{% for c in row %}<td class="{{ styles[rs] if sec.columns[loop.index0] == 'result' else '' }}">{{ c }}</td>{% endfor %}</tr>{% endfor %}
+    </tbody></table>
+  {% endif %}
+{% endfor %}
+{% endmacro %}

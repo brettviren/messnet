@@ -1,0 +1,38 @@
+{# A list the user can narrow (one pattern for any column, one per column) and order (click a heading). #}
+{% macro table(t) %}
+<section class="box" aria-label="{{ t.title }}">
+<h2>{{ t.title }} <span class="dim" style="text-transform:none">· {{ t.counted }}</span></h2>
+<form method="get" class="filter">
+  {% for name, value in t.hidden %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
+  <div class="bar">
+    <input type="text" name="{{ t.any_name }}" value="{{ t.query.any }}" placeholder="any column" aria-label="Search any column of {{ t.title }}">
+    <select name="{{ t.mode_name }}" aria-label="Search mode">
+      {% for m in t.modes %}<option value="{{ m }}"{% if m == t.query.mode %} selected{% endif %}>{{ m }}</option>{% endfor %}
+    </select>
+    <button type="submit">Filter</button>
+    {% if t.query.active %}<a href="{{ t.clear_url }}">clear</a>{% endif %}
+    <span class="dim" title="fuzzy: the letters in order; glob: * ? [a-z] on the whole cell; regex: found anywhere. Case is ignored.">?</span>
+  </div>
+  {% if t.error %}<div class="error">{{ t.error }}</div>{% endif %}
+  <table>
+    <thead>
+      <tr>{% for h in t.headings %}<th scope="col"><a href="{{ h.url }}" title="order by {{ h.column.title }}">{{ h.column.title }} {{ h.arrow }}</a></th>{% endfor %}</tr>
+      <tr>{% for h in t.headings %}<th><input type="text" name="{{ h.name }}" value="{{ h.value }}" aria-label="Filter {{ h.column.title }}"></th>{% endfor %}</tr>
+    </thead>
+    <tbody>
+    {% for row in t.rows %}
+      <tr{% if row.key == t.selected %} class="sel" aria-selected="true"{% endif %}>
+      {% for h in t.headings %}{% set cell = row.cells[h.column.key] %}
+        <td class="{{ styles[cell.style] }}{% if h.column.kind == 'number' %} num{% endif %}"{% if cell.title %} title="{{ cell.title }}"{% endif %}>
+          {%- if loop.first and row.href %}<a href="{{ row.href }}">{{ cell.text }}</a>{% else %}{{ cell.text }}{% endif -%}
+        </td>
+      {% endfor %}
+      </tr>
+    {% else %}
+      <tr><td colspan="{{ t.headings|length }}" class="dim">{{ t.empty if not t.query.active else 'Nothing matches.' }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</form>
+</section>
+{% endmacro %}

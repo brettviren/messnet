@@ -1,0 +1,8 @@
+<h2>{{ latest_title }}{% if live %} <span class="dim" style="text-transform:none">· {{ live }}</span>{% endif %}</h2>
+{% if latest %}
+<div class="head"><span class="dim">{{ latest.age }}</span> <strong>{{ latest.origin }}</strong> <span class="key">{{ latest.type }}</span>{% if latest.subject %} <span class="dim">· {{ latest.subject }}</span>{% endif %}</div>
+<div class="{{ styles[latest.summary.style] }}">{{ latest.summary.text }}</div>
+{% for fact in latest.facts %}<div><span class="dim">{{ fact.label }}:</span> <span class="{{ styles[fact.style] }}">{{ fact.value }}</span></div>{% endfor %}
+{% else %}
+<div class="dim">Waiting for events…</div>
+{% endif %}

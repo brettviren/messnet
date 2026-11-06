@@ -162,6 +162,11 @@ again, so pruned events are not re-replicated.
 | =eventview.py=  | per-type event formatting (summary, sections)          |
 | =tuimodel.py=   | host / event-type views over the state files           |
 | =tui.py=        | =messnet tui= (Textual)                                |
+| =feed.py=       | latest-event source shared by the UIs                  |
+| =tablequery.py= | narrowing (fuzzy/glob/regex) and ordering of tables    |
+| =webmodel.py=   | host / event-type tables for the web UI                |
+| =web.py=        | =messnet web=: Flask app, page registry, layout        |
+| =webpages.py=   | the =/hosts= and =/events= pages (templates/)          |
 | =logsetup.py=   | rotating service log file                              |
 | =install.py=    | install / list / remove cron and systemd entries       |
 | =cli.py=        | Click commands only                                    |
@@ -186,6 +191,7 @@ messnet serve [-l HOST:PORT ...]     # the same as a background daemon; one per 
 messnet serve -f | -d | -k           # foreground / foreground+debug on screen / stop it
 messnet subscribe [-t GLOB] [--replay N]   # follow events live via the node's publisher
 messnet tui                          # terminal view of the network (needs the tui extra)
+messnet web [--bind A] [--port N]    # browser view: /hosts, /events (needs the web extra)
 messnet install cron|systemd|--list  # keep serve running (idempotent)
 messnet uninstall cron|systemd       # undo; not installed is a no-op
 messnet config show [--file]         # effective configuration / raw file

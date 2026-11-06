@@ -54,3 +54,8 @@ def test_unusable_store_is_a_clean_error(tmp_path):
            "MESSNET_ETC": str(tmp_path / "etc"), "MESSNET_CONFIG": "", "XDG_CONFIG_HOME": str(tmp_path / "cfg")}
     res = CliRunner().invoke(cli, ["emit", "x.y.v1"], env=env, catch_exceptions=False)
     assert res.exit_code == 1 and res.output.startswith("Error: cannot record the event")
+
+
+def test_web_command_has_help(tmp_path):
+    out = run(tmp_path, "web", "--help")
+    assert "--bind" in out and "--port" in out and "--no-live" in out

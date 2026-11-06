@@ -42,6 +42,17 @@ class Summary:
     style: str = ""
 
 
+@dataclass
+class Latest:
+    """The compact 'latest event' block: who and when, the summary, then a few key facts."""
+    age: str
+    origin: str
+    type: str
+    subject: str
+    summary: Summary
+    facts: list[Line] = field(default_factory=list)
+
+
 # ---- small helpers ------------------------------------------------------------------------
 
 def parse_time(text) -> datetime | None:
@@ -155,6 +166,17 @@ def describe(ev: dict, now: datetime | None = None) -> list[Section]:
     if body is None:
         body = _generic_sections(ev)
     return [*body, _envelope(ev, now)]
+
+
+def latest_view(ev: dict, now: datetime | None = None) -> Latest:
+    """EV as the compact 'latest event' block shared by the terminal and web UIs."""
+    now = now or datetime.now(timezone.utc)
+    facts = []
+    if has_formatter(ev.get("type", "")):
+        facts = [line for line in describe(ev, now)[0].lines[:3]
+                 if line.label and line.label not in ("result", "overall")]
+    return Latest(age(parse_time(ev.get("time")), now), str(ev.get("origin", "?")), str(ev.get("type", "?")),
+                  str(ev.get("subject") or ""), summary(ev), facts)
 
 
 def to_text(sections: list[Section], width: int = 78) -> str:

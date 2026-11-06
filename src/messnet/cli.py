@@ -438,6 +438,18 @@ def subscribe_cmd(ctx, types, origin, replay, count, target, fmt):
         raise click.ClickException(str(err)) from err
 
 
+def _live_source(cfg, target, no_live) -> tuple[str | None, Path | None]:
+    """Where a UI gets live events: the node's publisher (TARGET, or the configured one) and its
+    'latest' file; neither with NO_LIVE."""
+    if no_live:
+        return None, None
+    try:
+        where = target or subscribe.default_target(cfg)
+    except subscribe.SubscribeError:
+        where = None
+    return where, cfg.latest
+
+
 @cli.command("tui", context_settings=CONTEXT)
 @click.option("--connect", "target", help="unix:PATH or HOST:PORT of a node's publisher (default: this node's).")
 @click.option("--no-live", is_flag=True, help="Follow the state files only; do not connect to the node.")
@@ -455,15 +467,35 @@ def tui_cmd(ctx, target, no_live):
         raise click.ClickException("the terminal UI needs the 'textual' package: install messnet with its 'tui' extra "
                                    "(uv tool install --editable '.[tui]', or pip install 'messnet[tui]')") from err
     cfg = ctx.obj
-    if no_live:
-        where = latest = None
-    else:
-        try:
-            where = target or subscribe.default_target(cfg)
-        except subscribe.SubscribeError:
-            where = None
-        latest = cfg.latest
+    where, latest = _live_source(cfg, target, no_live)
     MessnetTui(cfg.state, where, latest, cfg.node).run()
+
+
+@cli.command("web", context_settings=CONTEXT)
+@click.option("--bind", default="127.0.0.1", show_default=True, help="Address to listen on.")
+@click.option("--port", type=click.IntRange(1, 65535), default=8765, show_default=True, help="Port to listen on.")
+@click.option("--connect", "target", help="unix:PATH or HOST:PORT of a node's publisher (default: this node's).")
+@click.option("--no-live", is_flag=True, help="Follow the state files only; do not connect to the node.")
+@click.pass_context
+def web_cmd(ctx, bind, port, target, no_live):
+    """Serve the network to a web browser: hosts, events and the newest event.
+
+    Shows what 'messnet tui' shows, at /hosts and /events, with lists that can be narrowed
+    (fuzzy, glob or regex, per column) and ordered.  It has no login: it listens on this
+    machine only unless --bind says otherwise, so anyone who can reach the port can read
+    your events.
+    """
+    try:
+        from messnet import feed, web
+    except ImportError as err:
+        raise click.ClickException("the web UI needs the 'flask' package: install messnet with its 'web' extra "
+                                   "(uv tool install --editable '.[web]', or pip install 'messnet[web]')") from err
+    cfg = ctx.obj
+    where, latest = _live_source(cfg, target, no_live)
+    updates = feed.LatestFeed(cfg.state, where, latest)
+    updates.start()
+    click.echo(f"messnet web: http://{bind}:{port}/", err=True)
+    web.create_app(cfg.state, cfg.node, updates).run(host=bind, port=port, threaded=True)
 
 
 @cli.command(context_settings=CONTEXT)

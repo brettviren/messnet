@@ -10,7 +10,6 @@ only arranges it.  Live updates come from the node's concentrator (``subscribe``
 still follows the state files, a little less promptly.
 """
 
-import asyncio
 import contextlib
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,6 +25,7 @@ from textual.css.query import NoMatches
 from textual.widgets import DataTable, Footer, Header, Static
 
 from messnet import eventview, subscribe, tuimodel
+from messnet import feed as feed_
 
 STYLES = {eventview.OK: "green", eventview.WARN: "yellow", eventview.FAIL: "bold red",
           eventview.DIM: "dim", eventview.KEY: "cyan", "": ""}
@@ -59,24 +59,21 @@ def render_sections(sections: list[eventview.Section]) -> Group:
 
 def render_latest(ev: dict, now: datetime) -> Group:
     """The compact 'latest event' block: who and when, the summary, then a few key facts."""
-    when = eventview.parse_time(ev.get("time"))
-    s = eventview.summary(ev)
+    view = eventview.latest_view(ev, now)
     head = Text()
-    head.append(f"{eventview.age(when, now):>9}  ", style="dim")
-    head.append(str(ev.get("origin", "?")), style="bold")
+    head.append(f"{view.age:>9}  ", style="dim")
+    head.append(view.origin, style="bold")
     head.append("  ")
-    head.append(str(ev.get("type", "?")), style="cyan")
-    if ev.get("subject"):
+    head.append(view.type, style="cyan")
+    if view.subject:
         head.append(" · ", style="dim")
-        head.append(str(ev["subject"]), style="dim")
-    body = [head, Text(s.text, style=STYLES.get(s.style, ""))]
-    first = eventview.describe(ev, now)[0]
-    for line in first.lines[:3] if eventview.has_formatter(ev.get("type", "")) else []:
-        if line.label and line.label not in ("result", "overall"):
-            row = Text()
-            row.append(f"{line.label}: ", style="dim")
-            row.append(line.value, style=STYLES.get(line.style, ""))
-            body.append(row)
+        head.append(view.subject, style="dim")
+    body = [head, Text(view.summary.text, style=STYLES.get(view.summary.style, ""))]
+    for line in view.facts:
+        row = Text()
+        row.append(f"{line.label}: ", style="dim")
+        row.append(line.value, style=STYLES.get(line.style, ""))
+        body.append(row)
     return Group(*body)
 
 
@@ -132,7 +129,7 @@ class MessnetTui(App[None]):
         yield Footer()
 
     def on_mount(self) -> None:
-        self.query_one("#latest").border_title = self.TITLES["starting"]
+        self.query_one("#latest").border_title = feed_.TITLES["starting"]
         self.query_one("#detail-box").border_title = "Event"
         self._set_columns()
         self.reload(force=True)
@@ -286,45 +283,17 @@ class MessnetTui(App[None]):
         self._reload_timer = None
         self.reload()
 
-    TITLES = {"publisher": "Latest event · live",
-              "file": "Latest event · from the latest.json file",
-              "state": "Latest event · newest state file (no live feed: is 'messnet serve' running, and recent?)",
-              "starting": "Latest event"}
-
     def _status(self, text: str, feed: str) -> None:
         """Say where live information is coming from (TEXT, for the header) and use FEED for 'latest'."""
         self.live, self.feed = text, feed
         self.sub_title = f"live: {text}"
         with contextlib.suppress(NoMatches):
-            self.query_one("#latest").border_title = self.TITLES[feed]
+            self.query_one("#latest").border_title = feed_.TITLES[feed]
         if feed == "state":
             self.reload(force=True)
 
     async def _follow(self) -> None:
-        """Take live events from the concentrator; when it is not there, watch the latest file."""
-        seen = (self.latest or {}).get("id")
-        while True:
-            if self.target:
-                try:
-                    async for ev in subscribe.subscribe(
-                            self.target, replay=1, on_hello=lambda hello: self._status(f"connected to {self.target}", "publisher")):
-                        seen = ev.get("id")
-                        self.arrived(ev)
-                except subscribe.SubscribeError:
-                    pass
-                except (OSError, ValueError):
-                    pass
-            if self.latest_path and self.latest_path.exists():
-                self._status(f"polling {self.latest_path.name} (no node publishing)", "file")
-                for _ in range(5):                  # then try the concentrator again
-                    ev = subscribe.read_latest(self.latest_path)
-                    if ev and ev.get("id") != seen:
-                        seen = ev.get("id")
-                        self.arrived(ev)
-                    await asyncio.sleep(1.0)
-            else:
-                self._status("none (following the state files only)", "state")
-                await asyncio.sleep(2.0)
+        await feed_.follow(self.target, self.latest_path, self.arrived, self._status, (self.latest or {}).get("id"))
 
     # ---- interaction ----------------------------------------------------------------------------------
 

@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>messnet{% if current %} · {{ current.title }}{% endif %}</title>
+<style>
+:root { color-scheme: light dark; --bg:#fafafa; --fg:#1d2024; --dim:#6b7280; --line:#d5d9de; --panel:#fff;
+        --accent:#0b6bcb; --sel:#dbeafe; --ok:#15803d; --warn:#a16207; --fail:#b91c1c; --key:#0e7490; }
+@media (prefers-color-scheme: dark) { :root { --bg:#14171a; --fg:#e4e6e9; --dim:#9aa1ab; --line:#33383e; --panel:#1b1f23;
+        --accent:#6cb2ff; --sel:#1e3a5f; --ok:#4ade80; --warn:#facc15; --fail:#f87171; --key:#22d3ee; } }
+* { box-sizing: border-box; }
+body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.4 system-ui, sans-serif; }
+nav { position:sticky; top:0; z-index:2; display:flex; gap:.25rem; align-items:center; padding:.4rem 1rem;
+      background:var(--panel); border-bottom:1px solid var(--line); }
+nav .brand { font-weight:700; margin-right:1rem; }
+nav a { padding:.25rem .7rem; border-radius:.4rem; color:var(--fg); text-decoration:none; }
+nav a:hover { background:var(--sel); }
+nav a[aria-current="page"] { background:var(--accent); color:var(--bg); }
+nav .node { margin-left:auto; color:var(--dim); }
+main { padding:1rem; }
+a { color:var(--accent); }
+.dim { color:var(--dim); } .ok { color:var(--ok); } .warn { color:var(--warn); } .fail { color:var(--fail); font-weight:600; }
+.key { color:var(--key); }
+section.box { background:var(--panel); border:1px solid var(--line); border-radius:.5rem; padding:.5rem .75rem; margin-bottom:1rem;
+              overflow-x:auto; }
+section.box > h2 { margin:0 0 .4rem; font-size:.8rem; font-weight:600; text-transform:uppercase; letter-spacing:.04em; color:var(--dim); }
+table { border-collapse:collapse; width:100%; }
+th, td { text-align:left; padding:.2rem .6rem .2rem 0; vertical-align:top; }
+th a { color:var(--dim); text-decoration:none; white-space:nowrap; }
+th a:hover { color:var(--fg); }
+tr.sel td { background:var(--sel); }
+tbody tr:hover td { background:color-mix(in srgb, var(--sel) 50%, transparent); }
+td.num { text-align:right; font-variant-numeric:tabular-nums; }
+td a { color:inherit; text-decoration:none; display:block; }
+.filter input[type=text], .filter select { font:inherit; padding:.15rem .3rem; border:1px solid var(--line); border-radius:.3rem;
+        background:var(--bg); color:var(--fg); width:100%; min-width:4rem; }
+.bar { display:flex; gap:.5rem; align-items:center; flex-wrap:wrap; margin-bottom:.4rem; }
+.bar input[type=text] { width:14rem; }
+.bar .grow { flex:1; }
+button { font:inherit; padding:.15rem .7rem; border:1px solid var(--line); border-radius:.3rem; background:var(--bg); color:var(--fg); cursor:pointer; }
+.error { color:var(--fail); }
+.layout { display:grid; grid-template-columns:minmax(18rem, 26rem) 1fr; gap:1rem; align-items:start; }
+@media (max-width: 60rem) { .layout { grid-template-columns:1fr; } }
+dl.lines { display:grid; grid-template-columns:max-content 1fr; gap:.1rem 1rem; margin:0 0 .6rem; }
+dl.lines dt { color:var(--dim); } dl.lines dd { margin:0; overflow-wrap:anywhere; }
+h3 { margin:.6rem 0 .2rem; font-size:.95rem; color:var(--key); }
+#latest { position:sticky; bottom:0; z-index:2; margin:0; border-radius:0; border-width:1px 0 0; }
+#latest .head { display:flex; gap:.75rem; flex-wrap:wrap; }
+</style>
+</head>
+<body data-refresh="{{ refresh }}">
+<nav aria-label="Pages">
+  <span class="brand">messnet</span>
+  {% for p in pages %}<a href="{{ p.path }}"{% if current and p.path == current.path %} aria-current="page"{% endif %}>{{ p.title }}</a>{% endfor %}
+  {% if node %}<span class="node">{{ node }}</span>{% endif %}
+</nav>
+<main id="content">
+{% block content %}{% endblock %}
+</main>
+{% if current and current.latest %}
+<section class="box" id="latest" aria-label="Latest event">
+{% include "_latest.html" %}
+</section>
+{% endif %}
+<script>
+// Keep the page current without losing the user's place: only the content and the latest panel are
+// swapped, and not while a filter box has the keyboard.  The URL holds every selection.
+(function () {
+  const every = Number(document.body.dataset.refresh) * 1000;
+  if (!(every > 0)) return;
+  async function refresh() {
+    const a = document.activeElement;
+    if (document.hidden || (a && /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName))) return;
+    try {
+      const r = await fetch(location.href, { headers: { "X-Requested-With": "fetch" } });
+      if (!r.ok) return;
+      const doc = new DOMParser().parseFromString(await r.text(), "text/html");
+      for (const id of ["content", "latest"]) {
+        const fresh = doc.getElementById(id), old = document.getElementById(id);
+        if (fresh && old && fresh.innerHTML !== old.innerHTML) old.innerHTML = fresh.innerHTML;
+      }
+    } catch (e) { /* the server is away; try again next time */ }
+  }
+  setInterval(refresh, every);
+})();
+</script>
+</body>
+</html>

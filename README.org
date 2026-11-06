@@ -39,7 +39,10 @@ uv run messnet state get 'backup.*'
   =messnet validate= audits stored events.  Replication never checks.
 - watching it :: =messnet tui= is a terminal view of the state files
   (host view or event-type view, events formatted per type, plus the newest
-  event live; needs the =tui= extra).  =serve= also offers pure consumers a
+  event live; needs the =tui= extra); =messnet web= shows the same in a browser
+  (pages =/hosts= and =/events=, lists narrowed by fuzzy, glob or regex patterns per
+  column and ordered by any column; needs the =web= extra, listens on localhost,
+  no login).  =serve= also offers pure consumers a
   single local connection (a unix socket by default, =publish= in the config;
   =messnet subscribe= is the reference client) and keeps =latest.json= holding the
   newest event.  See [[file:docs/design.org]], "Watching the network".
@@ -77,6 +80,7 @@ messnet install cron                                 # ... or via crontab; both 
 messnet install --list                               # what is installed
 messnet integrate claude                             # Claude Code hooks announce sessions (--status, --remove)
 messnet tui                                          # watch the network: hosts / event types, live latest event
+messnet web [--port N]                               # the same in a browser (needs the web extra)
 messnet subscribe -t 'backup.*'                      # follow events live through the local node
 #+end_example
 

@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% from "_table.html" import table %}
+{% from "_detail.html" import sections as render_sections %}
+{% block content %}
+<div class="layout">
+  <div>{{ table(groups) }}</div>
+  <div>
+    {{ table(events) }}
+    <section class="box" aria-label="Event">
+      <h2>Event</h2>
+      {% if sections %}{{ render_sections(sections) }}{% else %}<span class="dim">Nothing selected.</span>{% endif %}
+    </section>
+  </div>
+</div>
+{% endblock %}
