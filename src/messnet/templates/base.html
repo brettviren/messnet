@@ -49,7 +49,7 @@ h3 { margin:.6rem 0 .2rem; font-size:.95rem; color:var(--key); }
 #latest .head { display:flex; gap:.75rem; flex-wrap:wrap; }
 </style>
 </head>
-<body data-refresh="{{ refresh }}">
+<body data-version="{{ version }}" data-fallback="{{ fallback }}">
 <nav aria-label="Pages">
   <span class="brand">messnet</span>
   {% for p in pages %}<a href="{{ p.path }}"{% if current and p.path == current.path %} aria-current="page"{% endif %}>{{ p.title }}</a>{% endfor %}
@@ -64,14 +64,47 @@ h3 { margin:.6rem 0 .2rem; font-size:.95rem; color:var(--key); }
 </section>
 {% endif %}
 <script>
-// Keep the page current without losing the user's place: only the content and the latest panel are
-// swapped, and not while a filter box has the keyboard.  The URL holds every selection.
+// The page holds /_changes open; the server sends the current version when it moves.  A version other
+// than the one this page was drawn at means: fetch this page again and swap in the content and the
+// latest panel (the URL holds every selection, so nothing is lost).  Also fetch after a long silence,
+// and when the tab comes back; a hidden tab holds no connection.  Ages are kept current here, from
+// the timestamps, so they need no traffic.
 (function () {
-  const every = Number(document.body.dataset.refresh) * 1000;
-  if (!(every > 0)) return;
+  const body = document.body;
+  let version = body.dataset.version, source = null, fallback = null, pending = false;
+  const fallbackMs = Number(body.dataset.fallback) * 1000;
+
+  const busy = () => { const a = document.activeElement; return a && /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName); };
+
+  function ago(ms) {
+    let s = Math.floor(ms / 1000);
+    if (s < -1) return "in the future";
+    s = Math.max(0, s);
+    if (s < 60) return s + "s ago";
+    if (s < 3600) return Math.floor(s / 60) + "m ago";
+    if (s < 86400) return Math.floor(s / 3600) + "h ago";
+    return Math.floor(s / 86400) + "d ago";
+  }
+  let ticker = null;
+  function tick() {
+    clearTimeout(ticker);
+    let youngest = Infinity;
+    for (const el of document.querySelectorAll("time.age")) {
+      const ms = Date.now() - Date.parse(el.getAttribute("datetime"));
+      if (!isNaN(ms)) { youngest = Math.min(youngest, ms); el.textContent = ago(ms); }
+    }
+    if (!document.hidden) ticker = setTimeout(tick, youngest < 3600000 ? 5000 : 60000);
+  }
+
+  function restartFallback() {
+    clearTimeout(fallback);
+    fallback = setTimeout(refresh, fallbackMs);
+  }
+
   async function refresh() {
-    const a = document.activeElement;
-    if (document.hidden || (a && /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName))) return;
+    restartFallback();
+    if (busy()) { pending = true; return; }       // not while the user is typing; again when they stop
+    pending = false;
     try {
       const r = await fetch(location.href, { headers: { "X-Requested-With": "fetch" } });
       if (!r.ok) return;
@@ -80,9 +113,28 @@ h3 { margin:.6rem 0 .2rem; font-size:.95rem; color:var(--key); }
         const fresh = doc.getElementById(id), old = document.getElementById(id);
         if (fresh && old && fresh.innerHTML !== old.innerHTML) old.innerHTML = fresh.innerHTML;
       }
-    } catch (e) { /* the server is away; try again next time */ }
+      version = doc.body.dataset.version;
+      tick();
+    } catch (e) { /* the server is away; the stream reconnects and says if anything changed */ }
   }
-  setInterval(refresh, every);
+  document.addEventListener("focusout", () => setTimeout(() => { if (pending && !busy()) refresh(); }, 0));
+
+  function connect() {
+    if (source || !window.EventSource) return;
+    source = new EventSource("/_changes");
+    source.onmessage = (e) => { if (e.data !== version) refresh(); else restartFallback(); };
+  }
+  function disconnect() {
+    if (source) { source.close(); source = null; }
+  }
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) { disconnect(); clearTimeout(fallback); clearTimeout(ticker); }
+    else { refresh(); connect(); tick(); }
+  });
+
+  if (fallbackMs > 0) restartFallback();
+  if (!document.hidden) connect();
+  tick();
 })();
 </script>
 </body>

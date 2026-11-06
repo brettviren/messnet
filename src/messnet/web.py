@@ -21,11 +21,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlencode
 
-from flask import Flask, current_app, redirect, request
+from flask import Flask, Response, current_app, redirect, request
 
-from messnet import eventview, feed, tablequery, tuimodel
+from messnet import changes, eventview, feed, tablequery, tuimodel
 
-REFRESH_SECONDS = 3
+FALLBACK_SECONDS = 3600      # a page fetches again after this long without a push
+HEARTBEAT_SECONDS = 30       # the stream says it is alive this often (a comment the page ignores)
+WATCH_SECONDS = 1.0          # how often the server looks for changes while a page is connected
 
 
 @dataclass(frozen=True)
@@ -52,11 +54,17 @@ class Context:
     """What views share: where the state is and the latest-event feed."""
 
     def __init__(self, state_root: Path, node: str = "", latest: feed.LatestFeed | None = None,
-                 refresh: float = REFRESH_SECONDS):
-        self.state_root, self.node, self.refresh = Path(state_root), node, refresh
+                 fallback: float = FALLBACK_SECONDS, heartbeat: float = HEARTBEAT_SECONDS,
+                 watch: float = WATCH_SECONDS):
+        self.state_root, self.node, self.fallback, self.heartbeat = Path(state_root), node, fallback, heartbeat
         self.feed = latest or feed.LatestFeed(self.state_root)
+        self.changes = changes.Changes(self._token, watch)
         self._lock = threading.Lock()
         self._cache: tuple[tuple, list[dict]] | None = None
+
+    def _token(self) -> tuple:
+        """What the pages show, in brief: when it differs from last time the pages are stale."""
+        return (tuimodel.signature(self.state_root), (self.feed.latest or {}).get("id"), self.feed.feed, self.feed.live)
 
     def events(self) -> list[dict]:
         """Every event in the state files, newest first; read again only when a state file changed."""
@@ -144,18 +152,42 @@ def table_view(prefix: str, title: str, columns: list[tablequery.Column], rows: 
 
 # ---- the application --------------------------------------------------------------------------------------
 
+def stream() -> Response:
+    """Server-sent events: a message holding the current version now, and again each time it moves.
+    The page compares it with the version it was drawn at and fetches itself again if they differ."""
+    ctx = context()
+
+    def messages():
+        with ctx.changes.watching():
+            version = ctx.changes.check()
+            yield f"retry: 5000\ndata: {version}\n\n"
+            while True:
+                latest = ctx.changes.wait(version, ctx.heartbeat)
+                if latest == version:
+                    yield ": alive\n\n"          # lets a vanished client be noticed and the thread freed
+                else:
+                    version = latest
+                    yield f"data: {version}\n\n"
+
+    return Response(messages(), mimetype="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
 def create_app(state_root: Path, node: str = "", latest: feed.LatestFeed | None = None,
-               refresh: float = REFRESH_SECONDS) -> Flask:
+               fallback: float = FALLBACK_SECONDS, heartbeat: float = HEARTBEAT_SECONDS,
+               watch: float = WATCH_SECONDS) -> Flask:
     """The web UI over the state files in STATE_ROOT.  LATEST supplies the latest-event panel
-    (call its ``start()`` for live updates)."""
+    (call its ``start()`` for live updates).  Pages hold ``/_changes`` open and fetch again when it
+    says something changed, and anyway after FALLBACK seconds without that."""
     from messnet import webpages              # noqa: F401  (registers the pages)
 
     app = Flask(__name__)
     app.jinja_env.globals["styles"] = {eventview.OK: "ok", eventview.WARN: "warn", eventview.FAIL: "fail",
                                        eventview.DIM: "dim", eventview.KEY: "key", "": ""}     # style name -> CSS class
-    app.extensions["messnet"] = ctx = Context(state_root, node, latest, refresh)
+    app.extensions["messnet"] = ctx = Context(state_root, node, latest, fallback, heartbeat, watch)
     for p in PAGES:
         app.add_url_rule(p.path, endpoint=p.path, view_func=p.view)
+    app.add_url_rule("/_changes", endpoint="changes", view_func=stream)
     app.add_url_rule("/", endpoint="root", view_func=lambda: redirect(PAGES[0].path))
 
     @app.context_processor
@@ -163,7 +195,8 @@ def create_app(state_root: Path, node: str = "", latest: feed.LatestFeed | None 
         now = datetime.now(timezone.utc)
         current = next((p for p in PAGES if p.path == request.path), None)
         event = ctx.feed.get(ctx.events()) if current and current.latest else None
-        return {"pages": PAGES, "current": current, "link": link, "node": ctx.node, "refresh": ctx.refresh,
+        return {"pages": PAGES, "current": current, "link": link, "node": ctx.node, "fallback": ctx.fallback,
+                "version": ctx.changes.check(),
                 "latest": eventview.latest_view(event, now) if event else None,
                 "latest_title": ctx.feed.title, "live": ctx.feed.live}
 

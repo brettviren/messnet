@@ -1,5 +1,7 @@
 """The web UI, through Flask's test client."""
 
+import threading
+
 import pytest
 
 pytest.importorskip("flask")
@@ -133,3 +135,70 @@ def test_a_page_can_be_added(tmp_path):
         assert 'href="/extra"' in get(client, "/hosts")
     finally:
         web.PAGES[:] = before
+
+
+def test_pages_carry_their_version_and_a_local_clock_for_ages(client):
+    html = get(client, "/hosts")
+    assert 'data-version="0"' in html and 'data-fallback="3600"' in html
+    body = html.split("<tbody>")[1]
+    assert '<time class="age" datetime="2026-10-11T11:55:00+00:00">' in body
+    assert '<time class="age dim" datetime="' in html.split('id="latest"')[1]
+    assert 'new EventSource("/_changes")' in html and "setInterval" not in html           # no polling
+
+
+def read_message(res, timeout=5.0):
+    """The next data line of a server-sent-event response, skipping comments."""
+    done = threading.Event()
+    got = []
+
+    def reader():
+        for chunk in res.response:
+            for line in chunk.decode().splitlines():
+                if line.startswith("data:"):
+                    got.append(line[5:].strip())
+                    done.set()
+                    return
+    threading.Thread(target=reader, daemon=True).start()
+    assert done.wait(timeout), "no message"
+    return got[0]
+
+
+def test_a_changed_state_file_is_pushed_and_quiet_means_a_heartbeat(tmp_path):
+    make_state(tmp_path)
+    app = web.create_app(tmp_path, "alpha", feed.LatestFeed(tmp_path), heartbeat=0.1, watch=0.05)
+    client = app.test_client()
+    version = client.get("/hosts").text.split('data-version="')[1].split('"')[0]
+    res = client.get("/_changes", buffered=False)
+    try:
+        assert res.mimetype == "text/event-stream" and res.headers["Cache-Control"] == "no-cache"
+        assert read_message(res) == version                          # the current version, to begin with
+        put(tmp_path, ev("demo.thing.v1", "gamma", None, "2026-10-12T00:00:00+00:00", {"n": 1}))
+        assert int(read_message(res)) == int(version) + 1            # pushed without being asked
+    finally:
+        res.close()
+
+
+def test_a_change_between_drawing_and_connecting_is_reported_at_once(tmp_path):
+    make_state(tmp_path)
+    app = web.create_app(tmp_path, watch=0.05)
+    client = app.test_client()
+    drawn = int(client.get("/hosts").text.split('data-version="')[1].split('"')[0])
+    put(tmp_path, ev("demo.thing.v1", "gamma", None, "2026-10-12T00:00:00+00:00", {"n": 1}))
+    res = client.get("/_changes", buffered=False)
+    try:
+        assert int(read_message(res)) > drawn                         # the page sees it differs and fetches
+    finally:
+        res.close()
+
+
+def test_a_quiet_stream_sends_heartbeats_the_page_ignores(tmp_path):
+    make_state(tmp_path)
+    client = web.create_app(tmp_path, heartbeat=0.05, watch=0.05).test_client()
+    res = client.get("/_changes", buffered=False)
+    try:
+        chunks = iter(res.response)
+        seen = [next(chunks).decode() for _ in range(3)]
+        assert seen[0].startswith("retry:") and "data: " in seen[0]
+        assert seen[1:] == [": alive\n\n", ": alive\n\n"]                # comments: no 'data:' line, so no page action
+    finally:
+        res.close()

@@ -40,6 +40,7 @@ class Cell:
     search: str | None = None         # what patterns see; defaults to the text
     style: str = ""
     title: str | None = None          # a tooltip
+    time: str | None = None           # an ISO moment, if the text is its age (so a page can keep it current)
 
     def sort_value(self, kind: str):
         if self.sort is not None:

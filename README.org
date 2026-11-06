@@ -41,8 +41,8 @@ uv run messnet state get 'backup.*'
   (host view or event-type view, events formatted per type, plus the newest
   event live; needs the =tui= extra); =messnet web= shows the same in a browser
   (pages =/hosts= and =/events=, lists narrowed by fuzzy, glob or regex patterns per
-  column and ordered by any column; needs the =web= extra, listens on localhost,
-  no login).  =serve= also offers pure consumers a
+  column and ordered by any column; pages are updated by server push, not polling;
+  needs the =web= extra, listens on localhost, no login).  =serve= also offers pure consumers a
   single local connection (a unix socket by default, =publish= in the config;
   =messnet subscribe= is the reference client) and keeps =latest.json= holding the
   newest event.  See [[file:docs/design.org]], "Watching the network".

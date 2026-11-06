@@ -46,6 +46,7 @@ class Summary:
 class Latest:
     """The compact 'latest event' block: who and when, the summary, then a few key facts."""
     age: str
+    time: str                         # ISO, '' if unknown: lets a page keep the age current
     origin: str
     type: str
     subject: str
@@ -175,7 +176,8 @@ def latest_view(ev: dict, now: datetime | None = None) -> Latest:
     if has_formatter(ev.get("type", "")):
         facts = [line for line in describe(ev, now)[0].lines[:3]
                  if line.label and line.label not in ("result", "overall")]
-    return Latest(age(parse_time(ev.get("time")), now), str(ev.get("origin", "?")), str(ev.get("type", "?")),
+    when = parse_time(ev.get("time"))
+    return Latest(age(when, now), when.isoformat() if when else "", str(ev.get("origin", "?")), str(ev.get("type", "?")),
                   str(ev.get("subject") or ""), summary(ev), facts)
 
 

@@ -24,7 +24,8 @@
       <tr{% if row.key == t.selected %} class="sel" aria-selected="true"{% endif %}>
       {% for h in t.headings %}{% set cell = row.cells[h.column.key] %}
         <td class="{{ styles[cell.style] }}{% if h.column.kind == 'number' %} num{% endif %}"{% if cell.title %} title="{{ cell.title }}"{% endif %}>
-          {%- if loop.first and row.href %}<a href="{{ row.href }}">{{ cell.text }}</a>{% else %}{{ cell.text }}{% endif -%}
+          {%- set text -%}{% if cell.time %}<time class="age" datetime="{{ cell.time }}">{{ cell.text }}</time>{% else %}{{ cell.text }}{% endif %}{%- endset -%}
+          {%- if loop.first and row.href %}<a href="{{ row.href }}">{{ text }}</a>{% else %}{{ text }}{% endif -%}
         </td>
       {% endfor %}
       </tr>

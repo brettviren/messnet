@@ -31,7 +31,8 @@ GROUP_NAME = {HOSTS: "host", TYPES: "event type"}
 def time_cell(when: datetime | None, now: datetime) -> Cell:
     """An age ('5m ago'), ordered by the moment itself; patterns see the age and the clock time."""
     full = eventview.local_time(when)
-    return Cell(eventview.age(when, now), sort=when, search=f"{eventview.age(when, now)} {full}", title=full)
+    return Cell(eventview.age(when, now), sort=when, search=f"{eventview.age(when, now)} {full}", title=full,
+                time=when.isoformat() if when else None)
 
 
 def group_rows(events: list[dict], view: str, now: datetime | None = None) -> list[Row]:

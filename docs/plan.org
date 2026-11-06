@@ -164,6 +164,7 @@ again, so pruned events are not re-replicated.
 | =tui.py=        | =messnet tui= (Textual)                                |
 | =feed.py=       | latest-event source shared by the UIs                  |
 | =tablequery.py= | narrowing (fuzzy/glob/regex) and ordering of tables    |
+| =changes.py=    | change notification for the web pages' push stream    |
 | =webmodel.py=   | host / event-type tables for the web UI                |
 | =web.py=        | =messnet web=: Flask app, page registry, layout        |
 | =webpages.py=   | the =/hosts= and =/events= pages (templates/)          |
