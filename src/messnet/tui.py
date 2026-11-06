@@ -21,6 +21,7 @@ from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.coordinate import Coordinate
 from textual.css.query import NoMatches
 from textual.widgets import DataTable, Footer, Header, Static
 
@@ -226,10 +227,20 @@ class MessnetTui(App[None]):
 
     @staticmethod
     def _fill(table: DataTable, rows: list[tuple[str, list]], keep: str | None) -> None:
+        """Make TABLE show ROWS without disturbing the user's place.
+
+        When the rows are the same ones in the same order only their cells change, so the cursor and
+        scroll position are untouched.  Otherwise the table is rebuilt and the cursor put back (and
+        scrolled into view) on the row with key KEEP, or the first row if that is gone."""
+        keys = [k for k, _ in rows]
+        if keys == [k.value for k in table.rows]:
+            for r, (_, cells) in enumerate(rows):
+                for c, cell in enumerate(cells):
+                    table.update_cell_at(Coordinate(r, c), cell, update_width=True)
+            return
         table.clear()
         for key, cells in rows:
             table.add_row(*cells, key=key)
-        keys = [k for k, _ in rows]
         if keys:
             table.move_cursor(row=keys.index(keep) if keep in keys else 0, animate=False)
 
@@ -324,10 +335,16 @@ class MessnetTui(App[None]):
         self._set_columns()
         self.redraw()
 
+    @staticmethod
+    def _cursor_key(table: DataTable) -> str | None:
+        if not table.row_count:
+            return None
+        return table.coordinate_to_cell_key(table.cursor_coordinate).row_key.value
+
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         key = event.row_key.value if event.row_key else None
-        if key is None:
-            return
+        if key is None or key != self._cursor_key(event.data_table):
+            return                                 # stale: the table was rebuilt since this was posted
         if event.data_table.id == "groups":
             if key != self.group_key:
                 self.group_key, self.event_key = key, None

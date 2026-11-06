@@ -283,3 +283,32 @@ def test_tui_command_reports_a_missing_toolkit_cleanly(tmp_path, monkeypatch):
     monkeypatch.delitem(sys.modules, "messnet.tui", raising=False)
     out = cli_run(tmp_path, "tui", codes=(1,))
     assert "tui" in out and "textual" in out
+
+
+def test_redraw_keeps_the_selected_event(tmp_path):
+    """A periodic redraw, or new state arriving, must not move the user's place in either list."""
+    make_state(tmp_path)
+
+    async def main():
+        app = app_for(tmp_path, redraw_every=0.1)
+        async with app.run_test(size=(130, 40)) as pilot:
+            await pilot.pause(0.2)
+            groups, events = app.query_one("#groups", DataTable), app.query_one("#events", DataTable)
+            await pilot.press("down")                                         # host beta
+            await until(pilot, lambda: app.group_key == "beta")
+            await pilot.press("tab", "down")                                  # its second event
+            await until(pilot, lambda: app.event_key and app.event_key.startswith("restic.status.v1"))
+            want = app.event_key
+            assert selected(events) == want and selected(groups) == "beta"
+            put(tmp_path, ev("restic.commit.v1", "gamma", "run", "2026-10-11T11:59:00+00:00",
+                             {"result": "ok", "method": "backup", "repository": "/r", "location": "local",
+                              "paths": ["/h"], "snapshot_id": "ef" * 32, "total_files_processed": 1,
+                              "total_bytes_processed": 2}))
+            await until(pilot, lambda: "gamma" in keys_of(groups))
+            for _ in range(10):                                               # let several redraws and messages land
+                await pilot.pause(0.1)
+                assert app.group_key == "beta" and app.event_key == want
+                assert selected(groups) == "beta" and selected(events) == want
+            assert app.focused is events                                      # nor did focus move
+
+    run(main())
