@@ -24,7 +24,8 @@ def _grouped(view: str, select: str, title: str) -> str:
 
     shown = webmodel.event_rows(events, view, chosen) if chosen is not None else []
     table, event_result = table_view("e_", f"{webmodel.GROUP_NAME[view]}: {chosen}" if chosen else "events",
-                                     webmodel.EVENT_COLUMNS[view], shown, empty="No events.")
+                                     webmodel.EVENT_COLUMNS[view], shown, empty="No events.",
+                                     scroll_id=f"{view}:{chosen}")
     wanted = request.args.get("event") or (event_result.rows[0].key if event_result.rows else None)
     for row in table.rows:
         row.href = link(event=row.key)

@@ -202,3 +202,15 @@ def test_a_quiet_stream_sends_heartbeats_the_page_ignores(tmp_path):
         assert seen[1:] == [": alive\n\n", ": alive\n\n"]                # comments: no 'data:' line, so no page action
     finally:
         res.close()
+
+
+def test_every_cell_of_a_row_selects_it_and_only_the_secondary_list_scrolls(client):
+    html = get(client, "/hosts?host=beta")
+    groups, events = html.split('aria-label="Event"')[0].split('<section class="box" aria-label=')[1:3]
+    for table in (groups, events):
+        for row in table.split("<tbody>")[1].split("</tbody>")[0].split("<tr")[1:]:
+            assert row.count("<a href=") == row.count("<td")                    # a link in every cell
+    cells = events.split("<tbody>")[1].split("<tr")[1]
+    assert len({part.split('"')[0] for part in cells.split('<a href="')[1:]}) == 1       # all to the same event
+    assert 'class="scroll" data-scroll="hosts:beta"' in events and "data-scroll" not in groups
+    assert 'data-scroll="types:restic.status.v1"' in get(client, "/events?type=restic.status.v1")

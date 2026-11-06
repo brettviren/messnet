@@ -14,7 +14,8 @@
     <span class="dim" title="fuzzy: the letters in order; glob: * ? [a-z] on the whole cell; regex: found anywhere. Case is ignored.">?</span>
   </div>
   {% if t.error %}<div class="error">{{ t.error }}</div>{% endif %}
-  <table>
+  <div{% if t.scroll_id %} class="scroll" data-scroll="{{ t.scroll_id }}"{% endif %}>
+  <table{% if t.rows and t.rows[0].href %} class="linked"{% endif %}>
     <thead>
       <tr>{% for h in t.headings %}<th scope="col"><a href="{{ h.url }}" title="order by {{ h.column.title }}">{{ h.column.title }} {{ h.arrow }}</a></th>{% endfor %}</tr>
       <tr>{% for h in t.headings %}<th><input type="text" name="{{ h.name }}" value="{{ h.value }}" aria-label="Filter {{ h.column.title }}"></th>{% endfor %}</tr>
@@ -25,7 +26,7 @@
       {% for h in t.headings %}{% set cell = row.cells[h.column.key] %}
         <td class="{{ styles[cell.style] }}{% if h.column.kind == 'number' %} num{% endif %}"{% if cell.title %} title="{{ cell.title }}"{% endif %}>
           {%- set text -%}{% if cell.time %}<time class="age" datetime="{{ cell.time }}">{{ cell.text }}</time>{% else %}{{ cell.text }}{% endif %}{%- endset -%}
-          {%- if loop.first and row.href %}<a href="{{ row.href }}">{{ text }}</a>{% else %}{{ text }}{% endif -%}
+          {%- if row.href %}<a href="{{ row.href }}">{{ text }}</a>{% else %}{{ text }}{% endif -%}
         </td>
       {% endfor %}
       </tr>
@@ -34,6 +35,7 @@
     {% endfor %}
     </tbody>
   </table>
+  </div>
 </form>
 </section>
 {% endmacro %}

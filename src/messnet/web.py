@@ -120,6 +120,7 @@ class TableView:
     modes: tuple = tablequery.MODES
     clear_url: str = ""
     empty: str = "Nothing to show."
+    scroll_id: str | None = None   # set to limit the table's height and scroll its rows; names what it lists
 
     @property
     def counted(self) -> str:
@@ -127,11 +128,13 @@ class TableView:
 
 
 def table_view(prefix: str, title: str, columns: list[tablequery.Column], rows: list[tablequery.Row],
-               selected: str | None = None, empty: str = "Nothing to show.") -> tuple[TableView, tablequery.Result]:
+               selected: str | None = None, empty: str = "Nothing to show.",
+               scroll_id: str | None = None) -> tuple[TableView, tablequery.Result]:
     """Apply the request's narrowing and ordering for the table PREFIX to ROWS.
 
     The table's arguments are PREFIX plus q, mode, sort, dir and c_<column>; a page with two tables
-    gives them different prefixes."""
+    gives them different prefixes.  With SCROLL_ID the table is limited in height and its rows scroll;
+    the id names what the rows are, so a page can keep the scroll position while the same list is shown."""
     query = tablequery.parse(request.args, prefix, columns)
     result = tablequery.apply(rows, columns, query)
     headings = []
@@ -146,7 +149,8 @@ def table_view(prefix: str, title: str, columns: list[tablequery.Column], rows: 
     hidden = [(k, v) for k, v in request.args.items() if k not in own or k in keep_own]
     clear = link(**{k: None for k in own if k not in keep_own})
     view = TableView(prefix, title, headings, result.rows, result.total, query, selected, result.error, hidden,
-                     tablequery.param(prefix, "q"), tablequery.param(prefix, "mode"), clear_url=clear, empty=empty)
+                     tablequery.param(prefix, "q"), tablequery.param(prefix, "mode"), clear_url=clear, empty=empty,
+                     scroll_id=scroll_id)
     return view, result
 
 
