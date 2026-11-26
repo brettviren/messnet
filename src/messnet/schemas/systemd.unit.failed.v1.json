@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "messnet:schema/systemd.unit.failed.v1",
+  "title": "systemd.unit.failed.v1",
+  "description": "A systemd user unit entered the failed state, or a start of it failed (systemd also runs OnFailure= for each failed attempt while it auto-restarts).  Emitted by dee's dee-notify@UNIT.service, the OnFailure= of every unit dee manages, with producer 'dee'.  Subject: the unit name, e.g. 'syncthing.service'.",
+  "type": "object",
+  "required": ["host", "unit", "result"],
+  "properties": {
+    "host": {"type": "string", "description": "The dee host name of the account the unit runs under."},
+    "unit": {"type": "string", "description": "The failed unit (also the subject)."},
+    "result": {
+      "type": "string",
+      "description": "systemd's Result= of the unit: 'exit-code', 'signal', 'core-dump', 'timeout', 'start-limit-hit', 'protocol', 'resources', ...; empty if systemd didn't say."
+    },
+    "status": {"type": ["integer", "null"], "description": "ExecMainStatus=: the main process's exit status or signal number; null if unknown."},
+    "restarts": {"type": ["integer", "null"], "minimum": 0, "description": "NRestarts=: automatic restarts so far; null if unknown."},
+    "log": {
+      "type": "array", "items": {"type": "string"},
+      "description": "The unit's last journal lines, oldest first."
+    }
+  },
+  "additionalProperties": true,
+  "x-messnet": {"subject": "required", "scope": "all", "semantics": "log"}
+}

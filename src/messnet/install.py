@@ -4,10 +4,12 @@ Targets (all per user, no root needed):
 
 ``cron``     a marker-delimited block in the user's crontab: ``@reboot`` plus a periodic
              check.  cron runs these with no login at all, so the node starts at boot.
-``systemd``  a user unit ``~/.config/systemd/user/messnet.service`` enabled for
-             ``default.target``, plus *lingering* so the user's service manager (and with it
-             the node) starts at boot instead of at first login, whether that login is
-             graphical, on the console or only over ssh.
+``systemd``  a user unit ``~/.local/share/systemd/user/messnet.service`` (``Type=notify``)
+             enabled for ``default.target``, plus *lingering* so the user's service manager
+             (and with it the node) starts at boot instead of at first login, whether that
+             login is graphical, on the console or only over ssh.  The unit goes under
+             ``$XDG_DATA_HOME`` because ``~/.config/systemd/user`` is often a version
+             controlled, shared directory; one an older messnet put there is moved.
 
 Everything here is idempotent: each step first looks at what is already in place and does
 only what is missing.  The entries are too: ``messnet serve`` holds a lock (see ``lock``),
@@ -198,6 +200,13 @@ def _systemd_quote(arg: str) -> str:
 
 
 def unit_path() -> Path:
+    """Where the unit goes: generated, per host, so not in ~/.config (often under version control)."""
+    base = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share")
+    return base / "systemd" / "user" / UNIT
+
+
+def legacy_unit_path() -> Path:
+    """Where messnet up to 0.x put the unit."""
     base = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
     return base / "systemd" / "user" / UNIT
 
@@ -208,6 +217,8 @@ def render_unit(service: Service) -> str:
             "Description=messnet node: event spool, state and links\n"
             "\n"
             "[Service]\n"
+            "Type=notify\n"
+            "NotifyAccess=main\n"
             f"ExecStart={' '.join(_systemd_quote(a) for a in service.argv(foreground=True))}\n"
             "Restart=on-failure\n"
             "RestartSec=10\n"
@@ -249,14 +260,33 @@ def _ours(path: Path) -> bool | None:
     return UNIT_MARK in path.read_text() if path.exists() else None
 
 
-def install_systemd(service: Service, serving: bool = False) -> Outcome:
-    """Install the user unit, enable it, start it unless a node service is SERVING already,
-    and make sure the user's service manager runs from boot."""
+def install_systemd(service: Service, serving: int | None = None) -> Outcome:
+    """Install the user unit, enable it, start it, and make sure the user's service manager
+    runs from boot.
+
+    SERVING is the pid of a running node service, if any.  One that systemd did not start
+    (from cron, or by hand) holds the store's lock, so the unit's would fail; refuse rather
+    than leave two ways of running the node.
+    """
     path, wanted = unit_path(), render_unit(service)
     out = Outcome()
     if _ours(path) is False:
         raise InstallError(f"{path} exists and was not made by 'messnet install'; "
                            "move it away or edit it by hand")
+    if serving and _systemctl("is-active", UNIT).returncode != 0:
+        try:
+            cron = describe_cron()
+        except InstallError:
+            cron = None
+        how = " (and cron is set to restart it: first 'messnet uninstall cron')" if cron else ""
+        raise InstallError(f"messnet serve is already running (pid {serving}), not under systemd{how}; "
+                           "stop it with 'messnet serve -k', then install again")
+    legacy = legacy_unit_path()
+    if legacy != path and _ours(legacy):
+        _systemctl("disable", UNIT)           # its [Install] links point at the old file
+        legacy.unlink()
+        out.changed = True
+        out.notes.append(f"removed {legacy} (units now go in {path.parent})")
     rewritten = not path.exists() or path.read_text() != wanted
     if rewritten:
         _atomic_write(path, wanted)
@@ -271,12 +301,10 @@ def install_systemd(service: Service, serving: bool = False) -> Outcome:
     if active and rewritten:
         _systemctl_ok("restart", UNIT)
         out.notes.append(f"restarted {UNIT} to pick up the new command")
-    elif not active and not serving:
+    elif not active:
         _systemctl_ok("start", UNIT)
         out.changed = True
         out.notes.append(f"started {UNIT}")
-    elif not active:
-        out.notes.append("a messnet service is already running (not started by systemd); not starting another")
     linger = lingering()
     if linger is False:
         res = _run("loginctl", "enable-linger", getpass.getuser())
@@ -295,23 +323,29 @@ def install_systemd(service: Service, serving: bool = False) -> Outcome:
     return out
 
 
+def _unit_paths() -> list[Path]:
+    """The unit file locations to look at: the current one, then the legacy one."""
+    return list(dict.fromkeys((unit_path(), legacy_unit_path())))
+
+
 def uninstall_systemd() -> Outcome:
-    path = unit_path()
-    ours = _ours(path)
-    if ours is None:
+    found = [(p, _ours(p)) for p in _unit_paths() if p.exists()]
+    if not found:
         return Outcome(notes=["not installed; nothing to do"])
-    if not ours:
-        return Outcome(notes=[f"{path} was not made by 'messnet install'; left alone"])
+    mine = [p for p, ours in found if ours]
+    if not mine:
+        return Outcome(notes=[f"{p} was not made by 'messnet install'; left alone" for p, _ in found])
     _systemctl("disable", "--now", UNIT)       # fine if it was not enabled or running
-    path.unlink()
+    for p in mine:
+        p.unlink()
     _systemctl_ok("daemon-reload")
-    return Outcome(True, [f"stopped, disabled and removed {path}",
+    return Outcome(True, [*(f"stopped, disabled and removed {p}" for p in mine),
                           "lingering was left as it is (other services may rely on it)"])
 
 
 def describe_systemd() -> list[str] | None:
-    path = unit_path()
-    if not path.exists():
+    path = next((p for p in _unit_paths() if p.exists()), None)
+    if path is None:
         return None
     lines = [f"unit file: {path}" + ("" if _ours(path) else "  (not made by messnet install)")]
     lines += [f"  {line}" for line in path.read_text().splitlines() if line.startswith("ExecStart=")]
@@ -331,7 +365,7 @@ def describe_systemd() -> list[str] | None:
 TARGETS = ("cron", "systemd")
 
 
-def install(target: str, service: Service, interval: int = DEFAULT_INTERVAL, serving: bool = False) -> Outcome:
+def install(target: str, service: Service, interval: int = DEFAULT_INTERVAL, serving: int | None = None) -> Outcome:
     if target == "cron":
         return install_cron(service, interval)
     if target == "systemd":

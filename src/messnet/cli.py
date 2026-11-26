@@ -11,7 +11,7 @@ from pathlib import Path
 
 import click
 
-from messnet import claudehook, daemon, daemonize, install, integrate, integrate_claude, lock, logsetup, manager, netdetect, peers, state, subscribe
+from messnet import claudehook, daemon, daemonize, install, integrate, integrate_claude, lock, logsetup, manager, netdetect, peers, sdnotify, state, subscribe
 from messnet.cli_config import config_grp
 from messnet.config import config_file, load_config
 from messnet.event import EventError, default_source, dumps, parse_assignments
@@ -236,6 +236,7 @@ def _run_exclusive(ctx: click.Context, main, report=_noop, screen: bool = False)
         note = "" if logged else "; warning: cannot write the log file"
 
         def ready() -> None:
+            sdnotify.ready(f"serving node {ctx.obj.node}")      # under systemd's Type=notify
             report(True, "started", f"logging to {where}{note}")
 
         try:
@@ -691,7 +692,7 @@ def install_cmd(ctx, target, list_, interval, exe):
         return
     try:
         service = install.Service(install.resolve_exe(exe), install.global_args(**ctx.meta["global_opts"]))
-        outcome = install.install(target, service, interval, serving=lock.running_pid(lock.lock_path(ctx.obj.db)) is not None)
+        outcome = install.install(target, service, interval, serving=lock.running_pid(lock.lock_path(ctx.obj.db)))
     except install.InstallError as err:
         raise _install_error(err) from err
     for note in outcome.notes:

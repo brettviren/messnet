@@ -240,9 +240,9 @@ the store, so it means "one service per store").  A second start finds the
 lock held, does nothing and exits successfully (=-d= says so and fails, since a
 person is watching).  The kernel drops the lock when its holder dies, so a
 crash, =kill -9= or reboot leaves nothing stale.  That is what makes both
-mechanisms below idempotent at run time: cron may start it every few minutes,
-systemd and cron may both be installed, and a person may type =messnet serve=
-at any time.
+mechanisms below idempotent at run time: cron may start it every few minutes
+and a person may type =messnet serve= at any time.  (Under systemd, use one
+mechanism: see below.)
 
 ** Idempotent installation
 
@@ -257,11 +257,19 @@ Each step checks what is already in place and does only what is missing, so
   the block is replaced in place if it differs, and removing it restores
   the crontab as it was.  The lines carry a fixed =PATH= and absolute paths
   because cron has almost no environment.
-- *systemd* writes =~/.config/systemd/user/messnet.service= running
-  =messnet serve --foreground= (systemd supervises the process it starts; a
-  command that forked away would look finished and its daemon would be cleaned
-  up with the unit) with (=Restart=on-failure=,
-  =WantedBy=default.target=), runs =daemon-reload= only if the file
+- *systemd* writes =~/.local/share/systemd/user/messnet.service= (not
+  =~/.config/systemd/user=, which is often version controlled and shared
+  between hosts; a unit an older messnet put there is disabled and removed)
+  running =messnet serve --foreground= (systemd supervises the process it
+  starts; a command that forked away would look finished and its daemon would
+  be cleaned up with the unit) with =Type=notify= (the service sends
+  =READY=1= once its links and listeners are up, so =systemctl start= returns
+  when it is really running), =Restart=on-failure= and
+  =WantedBy=default.target=.  It refuses while a node service that systemd
+  did not start holds the lock (from cron, or typed by hand): the unit's
+  =serve -f= would find the lock held and exit, which =Type=notify= counts
+  as a failure.  Move from cron with =messnet uninstall cron=,
+  =messnet serve -k=, =messnet install systemd=.  It runs =daemon-reload= only if the file
   changed, =enable= only if not enabled, =start= only if not running (and
   =restart= if the file changed under a running service), and enables
   /lingering/.  Without lingering the user's service manager starts at

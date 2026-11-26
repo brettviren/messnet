@@ -98,7 +98,11 @@ def exe(tmp_path):
 
 
 def unit_file(tmp_path) -> Path:
-    return tmp_path / "cfg" / "systemd" / "user" / "messnet.service"       # the runner sets XDG_CONFIG_HOME=cfg
+    return tmp_path / "data" / "systemd" / "user" / "messnet.service"      # the runner sets XDG_DATA_HOME=data
+
+
+def legacy_unit_file(tmp_path) -> Path:
+    return tmp_path / "cfg" / "systemd" / "user" / "messnet.service"       # ... and XDG_CONFIG_HOME=cfg
 
 
 # ---- pure pieces ----------------------------------------------------------------------
@@ -153,6 +157,7 @@ def test_unit_quoting():
     unit = install.render_unit(install.Service("/opt/a b/messnet", ("--node", "50%$x")))
     assert 'ExecStart="/opt/a b/messnet" --node 50%%$$x serve --foreground\n' in unit
     assert unit.startswith(install.UNIT_MARK) and "WantedBy=default.target" in unit
+    assert "Type=notify\nNotifyAccess=main\n" in unit
 
 
 # ---- cron -----------------------------------------------------------------------------
@@ -260,18 +265,41 @@ with lock.single_instance(Path(sys.argv[1])) as owner:
 """
 
 
-def test_systemd_does_not_start_when_a_service_is_already_running(tmp_path, fake, exe):
+def test_systemd_refuses_while_another_service_runs(tmp_path, fake, exe):
+    """A node not started by systemd (cron's, say) holds the lock: refuse, write nothing."""
     lock_file = lock.lock_path(tmp_path / "db")
     holder = subprocess.Popen([sys.executable, "-c", HOLD_LOCK, str(lock_file)], stdout=subprocess.PIPE, text=True)
     try:
         assert holder.stdout.readline().strip() == "True"           # it holds the lock for real
-        out = run(tmp_path, "install", "systemd", "--exe", exe)
-        assert "already running" in out and "start messnet.service" not in "\n".join(fake.calls())
+        run(tmp_path, "install", "cron", "--exe", exe)
+        fake.forget_calls()
+        out = run(tmp_path, "install", "systemd", "--exe", exe, codes=(1,))
+        assert f"already running (pid {holder.pid}), not under systemd" in out
+        assert "messnet uninstall cron" in out and "messnet serve -k" in out
+        assert not unit_file(tmp_path).exists() and fake.mutating() == []
         listing = run(tmp_path, "install", "--list")
         assert f"running: messnet serve is running (pid {holder.pid})" in listing
     finally:
         holder.kill()
         holder.wait()
+
+
+def test_systemd_moves_a_legacy_unit(tmp_path, fake, exe):
+    """A unit an older messnet wrote in ~/.config/systemd/user is replaced by one in ~/.local/share."""
+    old = legacy_unit_file(tmp_path)
+    old.parent.mkdir(parents=True)
+    old.write_text(f"{install.UNIT_MARK}; edits are overwritten.\n[Service]\nExecStart={exe} serve --foreground\n")
+    out = run(tmp_path, "install", "systemd", "--exe", exe)
+    assert f"removed {old}" in out and not old.exists() and unit_file(tmp_path).exists()
+    assert fake.calls("systemctl")[0] == "systemctl disable messnet.service"
+    assert "systemctl enable messnet.service" in fake.calls()
+
+
+def test_systemd_uninstall_removes_a_legacy_unit(tmp_path, fake):
+    old = legacy_unit_file(tmp_path)
+    old.parent.mkdir(parents=True)
+    old.write_text(f"{install.UNIT_MARK}; edits are overwritten.\n")
+    assert f"removed {old}" in run(tmp_path, "uninstall", "systemd") and not old.exists()
 
 
 def test_systemd_foreign_unit_is_never_touched(tmp_path, fake, exe):

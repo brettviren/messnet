@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "messnet:schema/dee.sync.v1",
+  "title": "dee.sync.v1",
+  "description": "A 'dee sync' on one account that changed something or failed: dee makes the host's systemd user units match its manifest (generated drop-ins and targets, enabling, starting, stopping, masking).  Emitted by producer 'dee'.  A sync that found nothing to do emits nothing.  Subject: the dee host name.",
+  "type": "object",
+  "required": ["host", "actions", "files", "errors"],
+  "properties": {
+    "host": {"type": "string", "description": "The host's name in the dee manifest (also the subject)."},
+    "config": {"type": "string", "description": "Absolute path of the manifest used."},
+    "actions": {
+      "type": "array", "items": {"type": "string"},
+      "description": "What was done to units, one line each, e.g. 'start syncthing.service', 'mask ssh-agent.socket', 'defer emacs@org-mcp.service'."
+    },
+    "files": {"type": "integer", "minimum": 0, "description": "How many generated files were written or removed."},
+    "errors": {
+      "type": "array", "items": {"type": "string"},
+      "description": "What failed; empty when the sync succeeded."
+    }
+  },
+  "additionalProperties": true,
+  "x-messnet": {"subject": "required", "scope": "all", "semantics": "log"}
+}
