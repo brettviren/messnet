@@ -1,1 +1,1 @@
-uv tool install -e '.[iroh,tui]' --upgrade --force
+uv tool install -e '.[iroh,tui,web]' --upgrade --force
